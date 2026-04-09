@@ -1,8 +1,6 @@
 package dev.lightforge.saathi.auth
 
 import android.content.Context
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
 import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
@@ -40,16 +38,6 @@ class TokenManager @Inject constructor(
     private val masterKey: MasterKey by lazy {
         MasterKey.Builder(context)
             .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .setKeyGenParameterSpec(
-                KeyGenParameterSpec.Builder(
-                    MasterKey.DEFAULT_MASTER_KEY_ALIAS,
-                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-                )
-                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                    .setKeySize(256)
-                    .build()
-            )
             .build()
     }
 
