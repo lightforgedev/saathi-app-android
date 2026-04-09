@@ -1,49 +1,70 @@
 package dev.lightforge.saathi.voice
 
+import android.util.Base64
 import android.util.Log
+import com.google.gson.Gson
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
-import okio.ByteString.Companion.toByteString
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
 /**
- * WebSocket client for Gemini Live API.
+ * WebSocket client for the Gemini Live API (bidirectional audio streaming).
  *
- * Handles bidirectional audio streaming:
- * - Sends PCM audio frames from the device microphone to Gemini
- * - Receives audio response frames from Gemini for playback
- * - Receives tool call requests from Gemini for backend relay
+ * Protocol — TEXT FRAMES ONLY (Gemini Live does NOT use binary frames):
+ *   Client → server: {"setup":{...}}, {"realtimeInput":{"mediaChunks":[{"mimeType":"audio/pcm;rate=16000","data":"<base64>"}]}}
+ *   Server → client: {"setupComplete":{}}, {"serverContent":{"modelTurn":{"parts":[{"inlineData":{"mimeType":"audio/pcm;rate=24000","data":"<base64>"}}]}}},
+ *                    {"toolCall":{"functionCalls":[{"id":"...","name":"...","args":{...}}]}}
  *
- * Protocol:
- * - Binary frames: raw PCM audio (16-bit, 16kHz mono)
- * - Text frames: JSON messages (setup, tool calls, tool results, session control)
+ * Audio directions:
+ *   Mic  → Gemini : 16kHz 16-bit mono PCM, base64-encoded in JSON text frames
+ *   Gemini → Speaker: 24kHz 16-bit mono PCM, base64-decoded from JSON text frames
  *
- * The ephemeral token is single-use and expires in 5 minutes.
- * Audio is never stored — streamed directly between mic/speaker and WebSocket.
+ * The full WebSocket URL (including auth token/key) is provided by the backend
+ * via POST /session → gemini_ws_url. Never build this URL client-side.
+ *
+ * Echo mode:
+ *   [connectEchoMode] skips the WebSocket entirely — mic audio is looped back into
+ *   [audioResponseFlow] directly. Useful for testing AudioPipeline end-to-end without
+ *   network or Gemini credentials.
  */
 class GeminiLiveClient @Inject constructor() {
 
     companion object {
         private const val TAG = "GeminiLiveClient"
-        private const val GEMINI_LIVE_WS_URL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
         private const val CONNECT_TIMEOUT_SEC = 10L
-        private const val READ_TIMEOUT_SEC = 0L // No timeout for streaming
+        private const val READ_TIMEOUT_SEC = 0L   // no timeout — streaming connection
         private const val PING_INTERVAL_SEC = 15L
+        private const val DEFAULT_MODEL = "models/gemini-2.0-flash-live-001"
+        private const val DEFAULT_VOICE = "Aoede"
     }
 
+    private val gson = Gson()
     private var webSocket: WebSocket? = null
+
+    @Volatile
     private var isConnected = false
 
-    // Audio response frames from Gemini -> AudioPipeline for playback
+    // Echo mode — loopback job instead of WebSocket
+    private var echoLoopbackJob: Job? = null
+    private var echoScope: CoroutineScope? = null
+
+    // 24kHz PCM chunks from Gemini (or echo loopback) → AudioPipeline.playAudio()
     private val _audioResponseFlow = MutableSharedFlow<ByteArray>(
         replay = 0,
         extraBufferCapacity = 64,
@@ -51,7 +72,7 @@ class GeminiLiveClient @Inject constructor() {
     )
     val audioResponseFlow: SharedFlow<ByteArray> = _audioResponseFlow.asSharedFlow()
 
-    // Tool call requests from Gemini -> ToolCallRelay for backend execution
+    // Tool call requests from Gemini → ToolCallRelay
     private val _toolCallFlow = MutableSharedFlow<ToolCall>(
         replay = 0,
         extraBufferCapacity = 16,
@@ -59,7 +80,7 @@ class GeminiLiveClient @Inject constructor() {
     )
     val toolCallFlow: SharedFlow<ToolCall> = _toolCallFlow.asSharedFlow()
 
-    private val client: OkHttpClient by lazy {
+    private val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(CONNECT_TIMEOUT_SEC, TimeUnit.SECONDS)
             .readTimeout(READ_TIMEOUT_SEC, TimeUnit.SECONDS)
@@ -67,107 +88,161 @@ class GeminiLiveClient @Inject constructor() {
             .build()
     }
 
+    // ------------------------------------------------------------------
+    // Public API
+    // ------------------------------------------------------------------
+
     /**
-     * Connects to the Gemini Live API with an ephemeral token.
+     * Connects to the Gemini Live API.
      *
-     * @param token Ephemeral API key from backend (POST /session)
-     * @param modelId Gemini model to use (e.g., "gemini-2.0-flash-live")
-     * @param systemInstruction System prompt for the voice agent
-     * @param tools List of tool declarations available to Gemini
+     * @param geminiWsUrl Full WebSocket URL from POST /session response (gemini_ws_url).
+     *   The URL already contains the ephemeral token or API key. Do NOT build this client-side.
+     * @param modelId Gemini model (default: gemini-2.0-flash-live-001)
+     * @param systemInstruction System prompt pre-built by backend (from /session response)
+     * @param tools   Tool declarations returned by /session
+     * @param onEvent Callback for connection events surfaced to UI (open, fail, close, setup).
+     *   Avoids needing ADB to diagnose connection issues during dev.
      */
     fun connect(
-        token: String,
-        modelId: String = "gemini-2.0-flash-live",
+        geminiWsUrl: String,
+        modelId: String = DEFAULT_MODEL,
         systemInstruction: String? = null,
-        tools: List<ToolDeclaration> = emptyList()
+        tools: List<ToolDeclaration> = emptyList(),
+        onEvent: ((String) -> Unit)? = null
     ) {
         if (isConnected) {
-            Log.w(TAG, "Already connected, disconnecting first")
+            Log.w(TAG, "Already connected — disconnecting first")
             disconnect()
         }
 
-        val url = "$GEMINI_LIVE_WS_URL?key=$token"
-        val request = Request.Builder().url(url).build()
+        val host = try { java.net.URI(geminiWsUrl).host } catch (e: Exception) { "?" }
+        Log.i(TAG, "Connecting to Gemini Live: host=$host")
+        onEvent?.invoke("WS connecting → $host")
 
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.i(TAG, "WebSocket connected to Gemini Live")
+        val request = Request.Builder().url(geminiWsUrl).build()
+
+        webSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(ws: WebSocket, response: Response) {
+                Log.i(TAG, "WebSocket connected (${response.code})")
                 isConnected = true
-                sendSetupMessage(webSocket, modelId, systemInstruction, tools)
+                onEvent?.invoke("WS connected (${response.code}) — sending setup")
+                sendSetupMessage(ws, modelId, systemInstruction, tools)
             }
 
-            override fun onMessage(webSocket: WebSocket, text: String) {
+            override fun onMessage(ws: WebSocket, text: String) {
+                if (text.contains("setupComplete")) {
+                    onEvent?.invoke("Gemini ready — speak now")
+                }
                 handleTextMessage(text)
             }
 
-            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                // Binary frame = audio response from Gemini
-                _audioResponseFlow.tryEmit(bytes.toByteArray())
+            // Gemini Live sends JSON text frames only — binary is unexpected
+            override fun onMessage(ws: WebSocket, bytes: ByteString) {
+                Log.w(TAG, "Unexpected binary frame (${bytes.size} bytes) — ignoring")
             }
 
-            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+            override fun onClosing(ws: WebSocket, code: Int, reason: String) {
                 Log.i(TAG, "WebSocket closing: $code $reason")
-                webSocket.close(1000, null)
+                onEvent?.invoke("WS closing: $code ${reason.take(60)}")
+                ws.close(1000, null)
                 isConnected = false
             }
 
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+            override fun onClosed(ws: WebSocket, code: Int, reason: String) {
                 Log.i(TAG, "WebSocket closed: $code $reason")
+                onEvent?.invoke("WS closed: $code ${reason.take(60)}")
                 isConnected = false
             }
 
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "WebSocket failure: ${t.message}", t)
+            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                val httpCode = response?.code
+                Log.e(TAG, "WebSocket FAILED: ${t.message} (http=$httpCode)", t)
+                onEvent?.invoke("WS FAILED http=$httpCode: ${t.message?.take(80)}")
                 isConnected = false
-                // TODO: Notify connection failure -> trigger reconnect or end call
             }
         })
     }
 
     /**
-     * Sends PCM audio data to Gemini.
-     * Called from AudioPipeline's mic capture callback on the IO thread.
+     * Echo mode — skips WebSocket entirely.
+     *
+     * Collects raw PCM from [AudioPipeline.captureFlow] and re-emits into
+     * [audioResponseFlow]. Since the capture rate is 16kHz and playback is
+     * configured for 24kHz, the echo will play at a slightly lower pitch —
+     * acceptable for a loopback correctness test.
+     */
+    fun connectEchoMode(pipeline: AudioPipeline) {
+        Log.i(TAG, "Starting echo/loopback mode (mic → speaker, no WebSocket)")
+        isConnected = true
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        echoScope = scope
+        echoLoopbackJob = scope.launch {
+            pipeline.captureFlow.collect { pcmChunk ->
+                _audioResponseFlow.emit(pcmChunk)
+            }
+        }
+    }
+
+    /**
+     * Sends a PCM audio chunk to Gemini.
+     * Audio must be 16kHz 16-bit mono. Wrapped in Gemini realtimeInput JSON envelope.
+     *
+     * @param pcmData Raw PCM bytes
+     * @param size    Number of valid bytes in pcmData
      */
     fun sendAudio(pcmData: ByteArray, size: Int) {
-        if (!isConnected) return
-        val data = if (size < pcmData.size) pcmData.copyOf(size) else pcmData
-        webSocket?.send(data.toByteString(0, data.size))
-    }
+        if (!isConnected || webSocket == null) return
 
-    /**
-     * Sends a tool call result back to Gemini after backend execution.
-     */
-    fun sendToolResult(callId: String, result: String) {
-        if (!isConnected) return
+        val bytes = if (size < pcmData.size) pcmData.copyOf(size) else pcmData
+        val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
 
-        val json = """
-            {
-                "tool_response": {
-                    "function_responses": [{
-                        "id": "$callId",
-                        "response": $result
-                    }]
-                }
-            }
-        """.trimIndent()
+        val json = buildString {
+            append("""{"realtimeInput":{"mediaChunks":[{"mimeType":"audio/pcm;rate=16000","data":""")
+            append('"')
+            append(b64)
+            append('"')
+            append("}]}")
+            append("}")
+        }
 
         webSocket?.send(json)
-        Log.d(TAG, "Sent tool result for call $callId")
     }
 
     /**
-     * Gracefully disconnects the WebSocket.
+     * Sends a tool result back to Gemini after backend execution.
+     *
+     * @param callId  The id from the original toolCall message
+     * @param result  JSON string with the tool result
+     */
+    fun sendToolResult(callId: String, result: String) {
+        if (!isConnected || webSocket == null) return
+
+        val json = """{"tool_response":{"function_responses":[{"id":"$callId","response":$result}]}}"""
+        webSocket?.send(json)
+        Log.d(TAG, "Tool result sent for id=$callId")
+    }
+
+    /**
+     * Closes the WebSocket (or stops echo loopback).
      */
     fun disconnect() {
         isConnected = false
+
+        echoLoopbackJob?.cancel()
+        echoLoopbackJob = null
+        echoScope = null
+
         webSocket?.close(1000, "Session ended")
         webSocket = null
         Log.i(TAG, "Disconnected from Gemini Live")
     }
 
+    // ------------------------------------------------------------------
+    // Internal — message handling
+    // ------------------------------------------------------------------
+
     /**
-     * Sends the initial setup message after WebSocket connection.
-     * Configures the model, system instruction, voice, and available tools.
+     * Sends the BidiGenerateContent setup message after WebSocket connection.
      */
     private fun sendSetupMessage(
         ws: WebSocket,
@@ -175,69 +250,194 @@ class GeminiLiveClient @Inject constructor() {
         systemInstruction: String?,
         tools: List<ToolDeclaration>
     ) {
-        // TODO: Build proper JSON setup message with:
-        //  - model selection
-        //  - generation_config (response_modalities: ["AUDIO"], speech_config)
-        //  - system_instruction
-        //  - tools declarations
-        val setupJson = buildString {
-            append("""{"setup":{"model":"models/$modelId"""")
-            append(""","generation_config":{"response_modalities":["AUDIO"]""")
-            append(""","speech_config":{"voice_config":{"prebuilt_voice_config":{"voice_name":"Aoede"}}}}""")
+        val setupObj = JsonObject().apply {
+            val setup = JsonObject()
+            setup.addProperty("model", modelId)
+
+            val genConfig = JsonObject()
+            val modalities = com.google.gson.JsonArray()
+            modalities.add("AUDIO")
+            genConfig.add("response_modalities", modalities)
+
+            val speechConfig = JsonObject()
+            val voiceConfig = JsonObject()
+            val prebuilt = JsonObject()
+            prebuilt.addProperty("voice_name", DEFAULT_VOICE)
+            voiceConfig.add("prebuilt_voice_config", prebuilt)
+            speechConfig.add("voice_config", voiceConfig)
+            genConfig.add("speech_config", speechConfig)
+            setup.add("generation_config", genConfig)
+
+            val realtimeInputConfig = JsonObject()
+            val aad = JsonObject()
+            aad.addProperty("disabled", false)
+            realtimeInputConfig.add("automatic_activity_detection", aad)
+            setup.add("realtime_input_config", realtimeInputConfig)
+
             if (systemInstruction != null) {
-                append(""","system_instruction":{"parts":[{"text":"${systemInstruction.replace("\"", "\\\"")}"}]}""")
+                val sysInstruction = JsonObject()
+                val parts = com.google.gson.JsonArray()
+                val part = JsonObject()
+                part.addProperty("text", systemInstruction)
+                parts.add(part)
+                sysInstruction.add("parts", parts)
+                setup.add("system_instruction", sysInstruction)
             }
+
             if (tools.isNotEmpty()) {
-                append(""","tools":[{"function_declarations":[""")
-                append(tools.joinToString(",") { it.toJson() })
-                append("]}]")
+                val toolsArray = com.google.gson.JsonArray()
+                val toolObj = JsonObject()
+                val funcDecls = com.google.gson.JsonArray()
+                tools.forEach { t ->
+                    funcDecls.add(JsonParser.parseString(t.toJson()))
+                }
+                toolObj.add("function_declarations", funcDecls)
+                toolsArray.add(toolObj)
+                setup.add("tools", toolsArray)
             }
-            append("}}")
+
+            add("setup", setup)
         }
 
-        ws.send(setupJson)
+        ws.send(gson.toJson(setupObj))
         Log.d(TAG, "Setup message sent (model=$modelId, tools=${tools.size})")
     }
 
     /**
-     * Handles JSON text messages from Gemini.
-     * Could be: setupComplete, toolCall, serverContent, sessionUpdate
+     * Dispatches Gemini JSON messages.
+     *
+     * Expected top-level keys:
+     *   "setupComplete" — session ready
+     *   "serverContent" — audio/text parts from model
+     *   "toolCall"      — function call request
+     *   "toolCallCancellation" — cancel pending tool call
      */
     private fun handleTextMessage(text: String) {
-        // TODO: Parse JSON properly with Gson
-        when {
-            text.contains("\"toolCall\"") || text.contains("\"function_call\"") -> {
-                // TODO: Parse tool call and emit to flow
-                Log.d(TAG, "Received tool call: ${text.take(200)}")
-                // val toolCall = parseToolCall(text)
-                // _toolCallFlow.tryEmit(toolCall)
+        try {
+            val root = JsonParser.parseString(text).asJsonObject
+
+            when {
+                root.has("setupComplete") -> {
+                    Log.i(TAG, "Gemini session setup complete")
+                }
+
+                root.has("serverContent") -> {
+                    handleServerContent(root.getAsJsonObject("serverContent"))
+                }
+
+                root.has("toolCall") -> {
+                    handleToolCall(root.getAsJsonObject("toolCall"))
+                }
+
+                root.has("toolCallCancellation") -> {
+                    Log.d(TAG, "Tool call cancelled: ${text.take(200)}")
+                }
+
+                else -> {
+                    Log.d(TAG, "Unhandled Gemini message: ${root.keySet()} (${text.take(100)})")
+                }
             }
-            text.contains("\"setupComplete\"") -> {
-                Log.i(TAG, "Gemini session setup complete")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing Gemini message: ${text.take(200)}", e)
+        }
+    }
+
+    /**
+     * Parses serverContent and extracts audio chunks from modelTurn.
+     *
+     * Audio: serverContent.modelTurn.parts[].inlineData.data → base64 decode → audioResponseFlow
+     */
+    private fun handleServerContent(serverContent: JsonObject) {
+        val turnComplete = serverContent.get("turnComplete")?.asBoolean ?: false
+        if (turnComplete) {
+            Log.d(TAG, "Gemini turn complete")
+            return
+        }
+
+        val interrupted = serverContent.get("interrupted")?.asBoolean ?: false
+        if (interrupted) {
+            Log.d(TAG, "Gemini turn interrupted (barge-in)")
+            return
+        }
+
+        val modelTurn = serverContent.getAsJsonObject("modelTurn") ?: return
+        val parts = modelTurn.getAsJsonArray("parts") ?: return
+
+        for (partElement in parts) {
+            val part = partElement.asJsonObject
+
+            val inlineData = part.getAsJsonObject("inlineData")
+            if (inlineData != null) {
+                val mimeType = inlineData.get("mimeType")?.asString ?: ""
+                val b64Data = inlineData.get("data")?.asString ?: continue
+
+                if (mimeType.startsWith("audio/")) {
+                    val pcmBytes = Base64.decode(b64Data, Base64.DEFAULT)
+                    _audioResponseFlow.tryEmit(pcmBytes)
+                    Log.v(TAG, "Audio chunk: ${pcmBytes.size} bytes ($mimeType)")
+                }
+                continue
             }
-            text.contains("\"serverContent\"") -> {
-                // Server content (text transcript, etc.) — log for debugging
-                Log.v(TAG, "Server content: ${text.take(100)}")
+
+            val text = part.get("text")?.asString
+            if (text != null) {
+                Log.v(TAG, "Model text: ${text.take(120)}")
             }
-            else -> {
-                Log.d(TAG, "Unhandled message: ${text.take(100)}")
+        }
+    }
+
+    /**
+     * Parses a toolCall message and emits to [toolCallFlow].
+     */
+    private fun handleToolCall(toolCallObj: JsonObject) {
+        val functionCalls = toolCallObj.getAsJsonArray("functionCalls") ?: return
+
+        for (fcElement in functionCalls) {
+            try {
+                val fc = fcElement.asJsonObject
+                val id = fc.get("id")?.asString ?: ""
+                val name = fc.get("name")?.asString ?: continue
+                val argsObj = fc.getAsJsonObject("args")
+
+                val args: Map<String, Any?> = if (argsObj != null) {
+                    argsObj.entrySet().associate { (k, v) ->
+                        k to when {
+                            v.isJsonPrimitive -> {
+                                val prim = v.asJsonPrimitive
+                                when {
+                                    prim.isBoolean -> prim.asBoolean
+                                    prim.isNumber  -> prim.asDouble
+                                    else           -> prim.asString
+                                }
+                            }
+                            v.isJsonNull -> null
+                            else         -> v.toString()
+                        }
+                    }
+                } else emptyMap()
+
+                val toolCall = ToolCall(id = id, functionName = name, arguments = args)
+                val emitted = _toolCallFlow.tryEmit(toolCall)
+                Log.i(TAG, "Tool call: $name (id=$id, emitted=$emitted)")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error parsing function call entry", e)
             }
         }
     }
 }
 
-/**
- * Represents a tool call request from Gemini.
- */
+// ------------------------------------------------------------------
+// Data classes
+// ------------------------------------------------------------------
+
+/** A tool call request from Gemini. */
 data class ToolCall(
     val id: String,
     val functionName: String,
     val arguments: Map<String, Any?>
 )
 
-/**
- * Represents a tool declaration to register with Gemini.
- */
+/** A tool function declaration to register with Gemini. */
 data class ToolDeclaration(
     val name: String,
     val description: String,
@@ -247,7 +447,7 @@ data class ToolDeclaration(
         val paramsJson = parameters.entries.joinToString(",") { (key, param) ->
             """"$key":{"type":"${param.type}","description":"${param.description}"}"""
         }
-        return """{"name":"$name","description":"$description","parameters":{"type":"object","properties":{$paramsJson}}}"""
+        return """{"name":"$name","description":"${description.replace("\"","'")}","parameters":{"type":"object","properties":{$paramsJson}}}"""
     }
 }
 

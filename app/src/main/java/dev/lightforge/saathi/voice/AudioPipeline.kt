@@ -16,6 +16,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
@@ -40,15 +44,17 @@ class AudioPipeline(private val context: Context) {
     companion object {
         private const val TAG = "AudioPipeline"
 
-        // Gemini Live expects 16kHz 16-bit mono PCM
-        const val SAMPLE_RATE = 16000
+        // Mic → Gemini: 16kHz 16-bit mono PCM
+        const val CAPTURE_SAMPLE_RATE = 16000
+        // Gemini → Speaker: 24kHz 16-bit mono PCM (Gemini Live output rate)
+        const val PLAYBACK_SAMPLE_RATE = 24000
+
         const val CHANNEL_IN = AudioFormat.CHANNEL_IN_MONO
         const val CHANNEL_OUT = AudioFormat.CHANNEL_OUT_MONO
         const val ENCODING = AudioFormat.ENCODING_PCM_16BIT
         const val BYTES_PER_SAMPLE = 2
 
-        // Buffer = 20ms of audio at 16kHz mono 16-bit = 640 bytes
-        // Use 4x min buffer for safety
+        // Buffer = 4x min buffer for stability
         private const val BUFFER_MULTIPLIER = 4
     }
 
@@ -61,10 +67,18 @@ class AudioPipeline(private val context: Context) {
     private val isRunning = AtomicBoolean(false)
     private val isPaused = AtomicBoolean(false)
 
-    private val minCaptureBuffer = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_IN, ENCODING)
-    private val minPlaybackBuffer = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_OUT, ENCODING)
+    private val minCaptureBuffer = AudioRecord.getMinBufferSize(CAPTURE_SAMPLE_RATE, CHANNEL_IN, ENCODING)
+    private val minPlaybackBuffer = AudioTrack.getMinBufferSize(PLAYBACK_SAMPLE_RATE, CHANNEL_OUT, ENCODING)
     private val captureBufferSize = minCaptureBuffer * BUFFER_MULTIPLIER
     private val playbackBufferSize = minPlaybackBuffer * BUFFER_MULTIPLIER
+
+    // Raw PCM from mic — used by GeminiLiveClient.connectEchoMode() for loopback testing
+    private val _captureFlow = MutableSharedFlow<ByteArray>(
+        replay = 0,
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val captureFlow: SharedFlow<ByteArray> = _captureFlow.asSharedFlow()
 
     /**
      * Starts the audio pipeline.
@@ -86,12 +100,16 @@ class AudioPipeline(private val context: Context) {
         }
 
         try {
-            // Initialize AudioRecord for mic capture
+            // Set AudioManager mode for VoIP routing (earpiece/speakerphone)
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+
+            // Initialize AudioRecord for mic capture at 16kHz
             audioRecord = AudioRecord.Builder()
                 .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
                 .setAudioFormat(
                     AudioFormat.Builder()
-                        .setSampleRate(SAMPLE_RATE)
+                        .setSampleRate(CAPTURE_SAMPLE_RATE)
                         .setChannelMask(CHANNEL_IN)
                         .setEncoding(ENCODING)
                         .build()
@@ -105,7 +123,8 @@ class AudioPipeline(private val context: Context) {
                 return false
             }
 
-            // Initialize AudioTrack for Gemini audio playback
+            // Initialize AudioTrack for Gemini audio playback at 24kHz
+            // (Gemini Live returns 24kHz PCM — must match or audio plays at wrong speed)
             audioTrack = AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
@@ -115,7 +134,7 @@ class AudioPipeline(private val context: Context) {
                 )
                 .setAudioFormat(
                     AudioFormat.Builder()
-                        .setSampleRate(SAMPLE_RATE)
+                        .setSampleRate(PLAYBACK_SAMPLE_RATE)
                         .setChannelMask(CHANNEL_OUT)
                         .setEncoding(ENCODING)
                         .build()
@@ -148,6 +167,8 @@ class AudioPipeline(private val context: Context) {
                     val bytesRead = audioRecord?.read(buffer, 0, buffer.size) ?: -1
                     if (bytesRead > 0) {
                         onAudioCaptured(buffer, bytesRead)
+                        // Also emit to captureFlow for echo-mode loopback
+                        _captureFlow.tryEmit(buffer.copyOf(bytesRead))
                     } else if (bytesRead < 0) {
                         Log.e(TAG, "AudioRecord read error: $bytesRead")
                         break
