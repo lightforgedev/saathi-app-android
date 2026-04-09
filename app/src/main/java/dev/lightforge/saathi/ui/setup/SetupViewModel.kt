@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 data class SetupUiState(
@@ -43,7 +44,7 @@ class SetupViewModel @Inject constructor(
             when (result) {
                 is DevicePairing.PairingResult.OtpSent -> {
                     _uiState.value = _uiState.value.copy(isLoading = false)
-                    onSuccess(result.pairingId)
+                    withContext(Dispatchers.Main) { onSuccess(result.pairingId) }
                 }
                 is DevicePairing.PairingResult.Error -> {
                     _uiState.value = _uiState.value.copy(

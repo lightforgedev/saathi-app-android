@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Saathi" parent="android:Theme.Material.Light.NoActionBar">
-        <!-- Compose handles theming; this is just the base Android theme -->
+    <style name="Theme.Saathi" parent="android:Theme.Material.NoActionBar">
+        <!-- Dark window background before Compose renders — eliminates white flash -->
+        <item name="android:windowBackground">@color/saathi_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>
 </resources>

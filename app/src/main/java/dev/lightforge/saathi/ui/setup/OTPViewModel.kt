@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 data class OTPUiState(
@@ -49,7 +50,7 @@ class OTPViewModel @Inject constructor(
                     tokenManager.storeDeviceToken(body.device_token)
                     tokenManager.storeOrgId(body.org_id)
                     _uiState.value = _uiState.value.copy(isLoading = false)
-                    onSuccess()
+                    withContext(Dispatchers.Main) { onSuccess() }
                 } else {
                     val errorMsg = when (response.code()) {
                         401 -> "OTP galat hai. Dobara try karein."
