@@ -100,16 +100,22 @@ class PhoneAccountManager @Inject constructor(
      * @param callerName Display name for the caller (if known)
      * @param sessionId Backend session ID for this call
      */
-    fun reportIncomingCall(callerNumber: String, callerName: String?, sessionId: String?) {
+    fun reportIncomingCall(
+        callerNumber: String,
+        callerName: String?,
+        sessionId: String?,
+        echoMode: Boolean = false
+    ) {
         try {
             val extras = Bundle().apply {
                 putString(SaathiConnectionService.EXTRA_CALLER_NUMBER, callerNumber)
                 putString(SaathiConnectionService.EXTRA_CALLER_NAME, callerName ?: callerNumber)
                 sessionId?.let { putString(SaathiConnectionService.EXTRA_SESSION_ID, it) }
+                putBoolean(SaathiConnectionService.EXTRA_ECHO_MODE, echoMode)
             }
 
             telecomManager.addNewIncomingCall(phoneAccountHandle, extras)
-            Log.i(TAG, "Reported incoming call from $callerNumber")
+            Log.i(TAG, "Reported incoming call from $callerNumber (echoMode=$echoMode)")
         } catch (e: SecurityException) {
             Log.e(TAG, "SecurityException reporting incoming call", e)
         } catch (e: Exception) {

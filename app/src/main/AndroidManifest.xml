@@ -56,6 +56,17 @@
             </intent-filter>
         </activity>
 
+        <!-- Spike 1 test harness — debug only, remove before release -->
+        <activity
+            android:name=".ui.spike.SpikeTestActivity"
+            android:exported="true"
+            android:label="Spike Test">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
         <!-- ConnectionService: handles telecom call routing -->
         <service
             android:name=".telecom.SaathiConnectionService"

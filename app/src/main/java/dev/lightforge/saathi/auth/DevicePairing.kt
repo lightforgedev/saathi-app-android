@@ -74,8 +74,8 @@ class DevicePairing @Inject constructor(
                 tokenManager.storeDeviceToken(body.device_token)
                 tokenManager.storeOrgId(body.org_id)
                 currentPairingId = null
-                Log.i(TAG, "Device paired with ${body.restaurant_name}")
-                PairingResult.Paired(body.restaurant_name)
+                Log.i(TAG, "Device paired with ${body.restaurant.name}")
+                PairingResult.Paired(body.restaurant.name)
             } else {
                 Log.e(TAG, "OTP verification failed: ${response.code()}")
                 PairingResult.Error(

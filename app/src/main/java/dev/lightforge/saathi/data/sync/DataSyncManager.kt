@@ -50,7 +50,7 @@ class DataSyncManager @Inject constructor(
 
             val config = response.body() ?: return false
             applyFullConfig(config)
-            Log.i(TAG, "Full sync complete: ${config.menu_items.size} menu items, ${config.reservation_slots.size} slots")
+            Log.i(TAG, "Full sync complete: ${config.menu_items.size} menu items, ${config.upcoming_reservations.size} reservations")
             true
         } catch (e: Exception) {
             Log.e(TAG, "Full sync exception", e)
@@ -67,28 +67,28 @@ class DataSyncManager @Inject constructor(
             // This runs synchronously within the transaction
         }
 
-        // Restaurant config
+        // Restaurant config — serialize business_hours object as JSON for local storage
         db.restaurantConfigDao().delete()
         db.restaurantConfigDao().upsert(
             RestaurantConfigEntity(
                 name = config.restaurant.name,
                 phone = config.restaurant.phone,
                 address = config.restaurant.address,
-                hoursJson = gson.toJson(config.restaurant.hours),
+                hoursJson = gson.toJson(config.restaurant.business_hours),
                 languagesJson = gson.toJson(config.restaurant.languages),
             )
         )
 
-        // Menu items
+        // Menu items — price is in paise, stored as-is (divide by 100 for display)
         db.menuItemDao().deleteAll()
         db.menuItemDao().insertAll(
             config.menu_items.map { item ->
                 MenuItemEntity(
                     id = item.id,
                     name = item.name,
-                    nameHindi = item.name_hindi,
+                    nameHindi = item.name_hi,
                     description = item.description,
-                    price = item.price,
+                    price = item.price.toDouble(),
                     category = item.category,
                     isAvailable = item.is_available,
                     isVeg = item.is_veg
@@ -96,15 +96,15 @@ class DataSyncManager @Inject constructor(
             }
         )
 
-        // Reservation slots
+        // Upcoming reservations (next 48h) — store as denormalised rows for owner UI
         db.reservationDao().deleteAll()
         db.reservationDao().insertAll(
-            config.reservation_slots.map { slot ->
+            config.upcoming_reservations.map { res ->
                 ReservationEntity(
-                    date = slot.date,
-                    time = slot.time,
-                    partySizeMax = slot.party_size_max,
-                    available = slot.available
+                    date = res.date,
+                    time = res.time,
+                    partySizeMax = res.party_size,
+                    available = res.status == "available"
                 )
             }
         )
