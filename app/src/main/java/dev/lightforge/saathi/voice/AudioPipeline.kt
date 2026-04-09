@@ -156,7 +156,7 @@ class AudioPipeline(private val context: Context) {
             // Launch mic capture loop
             val buffer = ByteArray(captureBufferSize)
             captureJob = scope.launch {
-                Log.i(TAG, "Mic capture started (${SAMPLE_RATE}Hz, mono, 16-bit)")
+                Log.i(TAG, "Mic capture started (${CAPTURE_SAMPLE_RATE}Hz, mono, 16-bit)")
                 while (isActive && isRunning.get()) {
                     if (isPaused.get()) {
                         // When paused (call on hold), skip reading but keep resources alive

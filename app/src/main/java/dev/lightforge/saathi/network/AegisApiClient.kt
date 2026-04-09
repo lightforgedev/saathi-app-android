@@ -1,12 +1,16 @@
 package dev.lightforge.saathi.network
 
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.ResponseBody
 import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
+import retrofit2.http.Query
 
 /**
  * Retrofit interface for the AEGIS Saathi backend API.
@@ -77,6 +81,28 @@ interface AegisApiClient {
      */
     @GET("config")
     suspend fun getConfig(): Response<ConfigResponse>
+
+    /**
+     * Home screen stats: today's calls handled, reservations made, last call duration.
+     */
+    @GET("stats")
+    suspend fun getStats(): Response<StatsResponse>
+
+    /**
+     * Paginated call history. Cursor-based pagination via `before` (ISO8601 timestamp).
+     */
+    @GET("calls")
+    suspend fun getCalls(
+        @Query("limit") limit: Int = 20,
+        @Query("before") before: String? = null,
+        @Query("date") date: String? = null
+    ): Response<CallsResponse>
+
+    /**
+     * Partial update of call handling mode, business hours, language, or notifications.
+     */
+    @PATCH("settings")
+    suspend fun updateSettings(@Body request: UpdateSettingsRequest): Response<UpdateSettingsResponse>
 }
 
 /**
@@ -92,10 +118,7 @@ suspend fun AegisApiClient.executeTool(
         append(com.google.gson.Gson().toJson(arguments))
         append("}")
     }
-    val body = RequestBody.create(
-        okhttp3.MediaType.parse("application/json"),
-        json
-    )
+    val body = json.toRequestBody("application/json".toMediaType())
     return executeTool(sessionId, body)
 }
 
@@ -162,15 +185,22 @@ data class SessionEndRequest(
 data class ConfigResponse(
     val restaurant: RestaurantConfigDto,
     val menu_items: List<MenuItemDto>,
-    val reservation_slots: List<ReservationSlotDto>
+    val reservation_slots: List<ReservationSlotDto>? = null,
+    val upcoming_reservations: List<ReservationSlotDto>? = null,
+    val synced_at: String? = null
 )
 
 data class RestaurantConfigDto(
     val name: String,
     val phone: String,
     val address: String,
-    val hours: Map<String, String>, // day -> "HH:MM-HH:MM"
-    val languages: List<String>
+    val city: String? = null,
+    val hours: Map<String, String>? = null, // day -> "HH:MM-HH:MM" (legacy field)
+    val business_hours: Map<String, BusinessHourDto>? = null,
+    val languages: List<String>? = null,
+    val primary_language: String? = null,
+    val call_mode: String? = null,
+    val greeting: String? = null
 )
 
 data class MenuItemDto(
@@ -189,4 +219,63 @@ data class ReservationSlotDto(
     val time: String,
     val party_size_max: Int,
     val available: Boolean
+)
+
+// --- Stats DTOs ---
+
+data class StatsResponse(
+    val today: DayStats,
+    val date: String
+)
+
+data class DayStats(
+    val calls_handled: Int,
+    val reservations_made: Int,
+    val last_call_duration_seconds: Int?
+)
+
+// --- Call Log DTOs ---
+
+data class CallsResponse(
+    val calls: List<CallRecord>,
+    val next_cursor: String?,
+    val has_more: Boolean
+)
+
+data class CallRecord(
+    val id: String,
+    val caller_number: String,
+    val caller_name: String?,
+    val direction: String,
+    val duration_seconds: Int,
+    val outcome: String,
+    val summary: String?,
+    val started_at: String,
+    val ended_at: String?
+)
+
+// --- Settings DTOs ---
+
+data class UpdateSettingsRequest(
+    val call_mode: String? = null,
+    val notifications: NotificationSettings? = null,
+    val primary_language: String? = null,
+    val greeting: String? = null,
+    val business_hours: Map<String, BusinessHourDto>? = null
+)
+
+data class NotificationSettings(
+    val whatsapp_daily_summary: Boolean? = null,
+    val per_call_notification: Boolean? = null
+)
+
+data class BusinessHourDto(
+    val open: String,
+    val close: String,
+    val closed: Boolean
+)
+
+data class UpdateSettingsResponse(
+    val ok: Boolean,
+    val updated_at: String
 )

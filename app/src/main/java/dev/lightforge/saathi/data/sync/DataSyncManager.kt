@@ -50,7 +50,7 @@ class DataSyncManager @Inject constructor(
 
             val config = response.body() ?: return false
             applyFullConfig(config)
-            Log.i(TAG, "Full sync complete: ${config.menu_items.size} menu items, ${config.reservation_slots.size} slots")
+            Log.i(TAG, "Full sync complete: ${config.menu_items.size} menu items, ${config.reservation_slots?.size ?: 0} slots")
             true
         } catch (e: Exception) {
             Log.e(TAG, "Full sync exception", e)
@@ -98,8 +98,9 @@ class DataSyncManager @Inject constructor(
 
         // Reservation slots
         db.reservationDao().deleteAll()
+        val slots = config.reservation_slots ?: config.upcoming_reservations ?: emptyList()
         db.reservationDao().insertAll(
-            config.reservation_slots.map { slot ->
+            slots.map { slot ->
                 ReservationEntity(
                     date = slot.date,
                     time = slot.time,
