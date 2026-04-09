@@ -66,6 +66,11 @@ class SaathiInCallService : InCallService() {
 
         @Suppress("DEPRECATION") val state = call.state
         if (state == Call.STATE_RINGING) {
+            if (!tokenManager.hasToken()) {
+                // Not paired — let call ring; owner can answer manually
+                Log.i(TAG, "Device not paired — not intercepting call from $callerNumber")
+                return
+            }
             if (!tokenManager.isSaathiActive()) {
                 // Saathi is deactivated — let the call ring normally (owner answers manually)
                 Log.i(TAG, "Saathi inactive — not intercepting call from $callerNumber")
@@ -107,12 +112,9 @@ class SaathiInCallService : InCallService() {
                 // Gemini's voice reaches the caller via the backend SIP bridge.
                 setMuted(true)
 
-                val deviceId = tokenManager.getDeviceId()
-                if (deviceId == null) {
-                    Log.e(TAG, "No device ID — cannot create Gemini session")
-                    call.disconnect()
-                    return@launch
-                }
+                // device_id may be absent if backend didn't return it during pairing;
+                // send empty string — backend can derive it from the Bearer JWT.
+                val deviceId = tokenManager.getDeviceId() ?: ""
 
                 // Create backend session → ephemeral Gemini token + system instruction
                 val sessionResp = try {
