@@ -1,102 +1,138 @@
 package dev.lightforge.saathi.network
 
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.ResponseBody
 import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.GET
-import retrofit2.http.Header
+import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
+import retrofit2.http.Query
 
 /**
  * Retrofit interface for the AEGIS Saathi backend API.
  *
  * Base URL: BuildConfig.AEGIS_API_BASE_URL + "/api/v1/saathi/"
- * Auth: Bearer device_token (JWT) added by [AuthInterceptor] for all endpoints
- *       except pair/verify (no auth required for those).
+ * Auth: Bearer device_token (JWT) added by [AuthInterceptor]
  *
- * Contract: docs/api/SAATHI_DEVICE_API.md
+ * All endpoints are suspend functions for coroutine integration.
  */
 interface AegisApiClient {
 
     /**
-     * Step 1 of device pairing: send phone number, backend sends OTP via SMS.
+     * Step 1 of device pairing: send phone number, receive OTP via SMS.
      *
-     * No auth required.
-     * Request:  { "phone_number": "+91XXXXXXXXXX", "device_name": "Samsung Galaxy A14" }
-     * Response: { "pairing_id": "uuid", "expires_in": 300 }
+     * Request: { "phone_number": "+91XXXXXXXXXX", "device_name": "Samsung Galaxy A14" }
+     * Response: { "pairing_id": "uuid", "otp_sent": true, "expires_in": 300 }
      */
     @POST("devices/pair")
     suspend fun startPairing(@Body request: PairRequest): Response<PairResponse>
 
     /**
-     * Step 2 of device pairing: verify OTP, receive 90-day device token.
+     * Step 2 of device pairing: verify OTP, receive device token (JWT).
      *
-     * No auth required.
-     * Request:  { "pairing_id": "uuid", "otp": "123456" }
-     * Response: { "device_token": "jwt...", "device_id": "uuid", "org_id": "uuid", ... }
+     * Request: { "pairing_id": "uuid", "otp": "123456" }
+     * Response: { "device_token": "jwt...", "org_id": "uuid", "restaurant_name": "..." }
      */
     @POST("devices/verify")
     suspend fun verifyPairing(@Body request: VerifyRequest): Response<VerifyResponse>
 
     /**
-     * Refresh device token before expiry (when < 7 days remain).
+     * Creates a voice session for an incoming/outgoing call.
+     * Returns an ephemeral Gemini token and session configuration.
      *
-     * Auth: Bearer device_token (the one being refreshed)
-     */
-    @POST("devices/refresh")
-    suspend fun refreshToken(): Response<RefreshResponse>
-
-    /**
-     * Create a voice session at the start of a call.
-     * Returns ephemeral Gemini token, full WebSocket URL, and all session config.
-     *
-     * Request:  { "caller_number": "+91...", "direction": "incoming", "device_id": "uuid" }
-     * Response: { "session_id", "session_token", "gemini_token", "gemini_ws_url",
-     *             "system_instruction", "tools", "config" }
+     * Request: { "caller_number": "+91...", "direction": "incoming" }
+     * Response: { "session_id": "uuid", "gemini_token": "...", "system_instruction": "...",
+     *             "tools": [...], "config": { "language": "hi", ... } }
      */
     @POST("session")
     suspend fun createSession(@Body request: SessionRequest): Response<SessionResponse>
 
     /**
-     * Execute a tool call during an active voice session.
-     * Requires TWO auth tokens: device_token (via AuthInterceptor) + session_token (header).
+     * Executes a tool call during an active voice session.
+     * The backend runs the tool against the restaurant's data and returns the result.
      *
-     * Request:  { "tool_name": "...", "tool_call_id": "fc-abc123", "arguments": {...} }
-     * Response: { "tool_call_id": "fc-abc123", "result": {...} }
+     * Request: { "tool_name": "lookup_menu", "arguments": { "query": "paneer" } }
+     * Response: raw JSON result to pass back to Gemini
      */
     @POST("session/{sessionId}/tool")
     suspend fun executeTool(
         @Path("sessionId") sessionId: String,
-        @Header("X-Session-Token") sessionToken: String,
-        @Body request: ToolCallRequest
-    ): Response<ToolCallResponse>
+        @Body request: RequestBody
+    ): Response<ResponseBody>
 
     /**
-     * Report session end for usage tracking and owner notification.
+     * Reports session end with telemetry data.
      *
-     * Request:  { "duration_ms": 45000, "tool_calls": 3, "disconnect_reason": "...",
-     *             "outcome": "...", "summary": "..." }
+     * Request: { "duration_ms": 45000, "tool_calls": 3, "disconnect_reason": "caller_hangup" }
      */
     @POST("session/{sessionId}/end")
     suspend fun endSession(
         @Path("sessionId") sessionId: String,
         @Body request: SessionEndRequest
-    ): Response<ResponseBody>
+    ): Response<Unit>
 
     /**
-     * Full config sync: restaurant metadata, menu items, upcoming reservations.
-     * Refresh on startup and when config.sync is received on the device WebSocket.
+     * Full config sync: menu items, hours, reservation slots, restaurant metadata.
+     * Called at startup and periodically to refresh local cache.
      */
     @GET("config")
     suspend fun getConfig(): Response<ConfigResponse>
+
+    /**
+     * Home screen stats: today's calls handled, reservations made, last call duration.
+     */
+    @GET("stats")
+    suspend fun getStats(): Response<StatsResponse>
+
+    /**
+     * Paginated call history. Cursor-based pagination via `before` (ISO8601 timestamp).
+     */
+    @GET("calls")
+    suspend fun getCalls(
+        @Query("limit") limit: Int = 20,
+        @Query("before") before: String? = null,
+        @Query("date") date: String? = null
+    ): Response<CallsResponse>
+
+    /**
+     * Partial update of call handling mode, business hours, language, or notifications.
+     */
+    @PATCH("settings")
+    suspend fun updateSettings(@Body request: UpdateSettingsRequest): Response<UpdateSettingsResponse>
 }
 
-// --- Request DTOs ---
+/**
+ * Extension: builds request body from tool name + arguments and calls executeTool.
+ */
+suspend fun AegisApiClient.executeTool(
+    sessionId: String,
+    toolName: String,
+    arguments: Map<String, Any?>
+): Response<ResponseBody> {
+    val json = buildString {
+        append("""{"tool_name":"$toolName","arguments":""")
+        append(com.google.gson.Gson().toJson(arguments))
+        append("}")
+    }
+    val body = json.toRequestBody("application/json".toMediaType())
+    return executeTool(sessionId, body)
+}
+
+// --- Request/Response DTOs ---
 
 data class PairRequest(
     val phone_number: String,
     val device_name: String
+)
+
+data class PairResponse(
+    val pairing_id: String,
+    val otp_sent: Boolean,
+    val expires_in: Int
 )
 
 data class VerifyRequest(
@@ -104,57 +140,20 @@ data class VerifyRequest(
     val otp: String
 )
 
-data class SessionRequest(
-    val caller_number: String,
-    val direction: String,  // "incoming" | "outgoing"
-    val device_id: String
-)
-
-data class ToolCallRequest(
-    val tool_name: String,
-    val tool_call_id: String,    // id from Gemini's functionCalls[].id — echo back in tool_response
-    val arguments: Map<String, Any?>
-)
-
-data class SessionEndRequest(
-    val duration_ms: Long,
-    val tool_calls: Int,
-    val disconnect_reason: String,  // "end_call_tool" | "caller_hangup" | "timeout" | "error"
-    val outcome: String,            // "resolved" | "escalated" | "abandoned" | "unclear"
-    val summary: String? = null
-)
-
-// --- Response DTOs ---
-
-data class PairResponse(
-    val pairing_id: String,
-    val expires_in: Int
-)
-
 data class VerifyResponse(
     val device_token: String,
-    val device_id: String,
     val org_id: String,
-    val restaurant: RestaurantSummaryDto,
-    val token_expires_at: String
+    val restaurant_name: String
 )
 
-data class RefreshResponse(
-    val device_token: String,
-    val token_expires_at: String
-)
-
-data class RestaurantSummaryDto(
-    val name: String,
-    val phone: String,
-    val city: String
+data class SessionRequest(
+    val caller_number: String,
+    val direction: String // "incoming" or "outgoing"
 )
 
 data class SessionResponse(
     val session_id: String,
-    val session_token: String,    // short-lived (15 min) — send as X-Session-Token on /tool calls
-    val gemini_token: String,     // ephemeral, single-use, 5-min expiry (not used directly — use gemini_ws_url)
-    val gemini_ws_url: String,    // full WSS URL with token embedded — connect directly, do NOT proxy
+    val gemini_token: String,
     val system_instruction: String,
     val tools: List<ToolDeclarationDto>,
     val config: SessionConfig
@@ -163,16 +162,10 @@ data class SessionResponse(
 data class ToolDeclarationDto(
     val name: String,
     val description: String,
-    val parameters: ToolParametersDto
+    val parameters: Map<String, ToolParameterDto>
 )
 
-data class ToolParametersDto(
-    val type: String,
-    val properties: Map<String, ToolPropertyDto>,
-    val required: List<String>? = null
-)
-
-data class ToolPropertyDto(
+data class ToolParameterDto(
     val type: String,
     val description: String
 )
@@ -180,61 +173,109 @@ data class ToolPropertyDto(
 data class SessionConfig(
     val language: String,
     val voice_name: String,
-    val max_duration_seconds: Int,
-    val vad_enabled: Boolean
+    val restaurant_name: String
 )
 
-data class ToolCallResponse(
-    val tool_call_id: String,
-    val result: Any?    // Pass directly to Gemini as tool_response
+data class SessionEndRequest(
+    val duration_ms: Long,
+    val tool_calls: Int,
+    val disconnect_reason: String
 )
 
 data class ConfigResponse(
     val restaurant: RestaurantConfigDto,
     val menu_items: List<MenuItemDto>,
-    val upcoming_reservations: List<ReservationDto>,
-    val synced_at: String
+    val reservation_slots: List<ReservationSlotDto>? = null,
+    val upcoming_reservations: List<ReservationSlotDto>? = null,
+    val synced_at: String? = null
 )
 
 data class RestaurantConfigDto(
-    val id: String,
     val name: String,
     val phone: String,
     val address: String,
-    val city: String,
-    val greeting: String,
-    val primary_language: String,
-    val languages: List<String>,
-    val call_mode: String,          // "full_auto" | "busy_no_answer" | "safety_net" | "off"
-    val business_hours: Map<String, BusinessHoursDto>,   // day (monday…sunday) → hours
-    val updated_at: String
-)
-
-data class BusinessHoursDto(
-    val open: String,       // "HH:MM"
-    val close: String,      // "HH:MM"
-    val closed: Boolean
+    val city: String? = null,
+    val hours: Map<String, String>? = null, // day -> "HH:MM-HH:MM" (legacy field)
+    val business_hours: Map<String, BusinessHourDto>? = null,
+    val languages: List<String>? = null,
+    val primary_language: String? = null,
+    val call_mode: String? = null,
+    val greeting: String? = null
 )
 
 data class MenuItemDto(
     val id: String,
     val name: String,
-    val name_hi: String?,
+    val name_hindi: String?,
     val description: String?,
-    val price: Long,        // paise — divide by 100 for display
+    val price: Double,
     val category: String,
     val is_available: Boolean,
-    val is_veg: Boolean,
-    val updated_at: String
+    val is_veg: Boolean
 )
 
-data class ReservationDto(
-    val id: String,
-    val customer_name: String,
-    val customer_phone: String,
-    val party_size: Int,
+data class ReservationSlotDto(
     val date: String,
     val time: String,
-    val status: String,
-    val notes: String?
+    val party_size_max: Int,
+    val available: Boolean
+)
+
+// --- Stats DTOs ---
+
+data class StatsResponse(
+    val today: DayStats,
+    val date: String
+)
+
+data class DayStats(
+    val calls_handled: Int,
+    val reservations_made: Int,
+    val last_call_duration_seconds: Int?
+)
+
+// --- Call Log DTOs ---
+
+data class CallsResponse(
+    val calls: List<CallRecord>,
+    val next_cursor: String?,
+    val has_more: Boolean
+)
+
+data class CallRecord(
+    val id: String,
+    val caller_number: String,
+    val caller_name: String?,
+    val direction: String,
+    val duration_seconds: Int,
+    val outcome: String,
+    val summary: String?,
+    val started_at: String,
+    val ended_at: String?
+)
+
+// --- Settings DTOs ---
+
+data class UpdateSettingsRequest(
+    val call_mode: String? = null,
+    val notifications: NotificationSettings? = null,
+    val primary_language: String? = null,
+    val greeting: String? = null,
+    val business_hours: Map<String, BusinessHourDto>? = null
+)
+
+data class NotificationSettings(
+    val whatsapp_daily_summary: Boolean? = null,
+    val per_call_notification: Boolean? = null
+)
+
+data class BusinessHourDto(
+    val open: String,
+    val close: String,
+    val closed: Boolean
+)
+
+data class UpdateSettingsResponse(
+    val ok: Boolean,
+    val updated_at: String
 )

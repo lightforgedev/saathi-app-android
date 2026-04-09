@@ -26,14 +26,17 @@ import javax.inject.Inject
 /**
  * WebSocket client for the Gemini Live API (bidirectional audio streaming).
  *
- * Protocol (text frames only — Gemini Live uses JSON, not raw binary):
- *   Client → server: {"setup":{...}}, {"realtimeInput":{"audio":{"mimeType":"audio/pcm;rate=16000","data":"<base64>"}}}
+ * Protocol — TEXT FRAMES ONLY (Gemini Live does NOT use binary frames):
+ *   Client → server: {"setup":{...}}, {"realtimeInput":{"mediaChunks":[{"mimeType":"audio/pcm;rate=16000","data":"<base64>"}]}}
  *   Server → client: {"setupComplete":{}}, {"serverContent":{"modelTurn":{"parts":[{"inlineData":{"mimeType":"audio/pcm;rate=24000","data":"<base64>"}}]}}},
  *                    {"toolCall":{"functionCalls":[{"id":"...","name":"...","args":{...}}]}}
  *
  * Audio directions:
- *   Mic  → Gemini : 16kHz 16-bit mono PCM, base64-encoded in JSON frames
- *   Gemini → Speaker: 24kHz 16-bit mono PCM, base64-encoded in JSON frames
+ *   Mic  → Gemini : 16kHz 16-bit mono PCM, base64-encoded in JSON text frames
+ *   Gemini → Speaker: 24kHz 16-bit mono PCM, base64-decoded from JSON text frames
+ *
+ * The full WebSocket URL (including auth token/key) is provided by the backend
+ * via POST /session → gemini_ws_url. Never build this URL client-side.
  *
  * Echo mode:
  *   [connectEchoMode] skips the WebSocket entirely — mic audio is looped back into
@@ -47,7 +50,7 @@ class GeminiLiveClient @Inject constructor() {
         private const val CONNECT_TIMEOUT_SEC = 10L
         private const val READ_TIMEOUT_SEC = 0L   // no timeout — streaming connection
         private const val PING_INTERVAL_SEC = 15L
-        private const val DEFAULT_MODEL = "models/gemini-3.1-flash-live-preview"
+        private const val DEFAULT_MODEL = "models/gemini-2.0-flash-live-001"
         private const val DEFAULT_VOICE = "Aoede"
     }
 
@@ -93,10 +96,12 @@ class GeminiLiveClient @Inject constructor() {
      * Connects to the Gemini Live API.
      *
      * @param geminiWsUrl Full WebSocket URL from POST /session response (gemini_ws_url).
-     *   The URL already contains the ephemeral token. Do NOT build this URL client-side.
+     *   The URL already contains the ephemeral token or API key. Do NOT build this client-side.
      * @param modelId Gemini model (default: gemini-2.0-flash-live-001)
      * @param systemInstruction System prompt pre-built by backend (from /session response)
      * @param tools   Tool declarations returned by /session
+     * @param onEvent Callback for connection events surfaced to UI (open, fail, close, setup).
+     *   Avoids needing ADB to diagnose connection issues during dev.
      */
     fun connect(
         geminiWsUrl: String,
@@ -131,13 +136,9 @@ class GeminiLiveClient @Inject constructor() {
                 handleTextMessage(text)
             }
 
-            // Gemini Live (v1alpha) sends responses as binary frames (UTF-8 encoded JSON)
+            // Gemini Live sends JSON text frames only — binary is unexpected
             override fun onMessage(ws: WebSocket, bytes: ByteString) {
-                val text = bytes.utf8()
-                if (text.contains("setupComplete")) {
-                    onEvent?.invoke("Gemini ready — speak now")
-                }
-                handleTextMessage(text)
+                Log.w(TAG, "Unexpected binary frame (${bytes.size} bytes) — ignoring")
             }
 
             override fun onClosing(ws: WebSocket, code: Int, reason: String) {
@@ -169,8 +170,6 @@ class GeminiLiveClient @Inject constructor() {
      * [audioResponseFlow]. Since the capture rate is 16kHz and playback is
      * configured for 24kHz, the echo will play at a slightly lower pitch —
      * acceptable for a loopback correctness test.
-     *
-     * Call this instead of [connect] when testing without Gemini credentials.
      */
     fun connectEchoMode(pipeline: AudioPipeline) {
         Log.i(TAG, "Starting echo/loopback mode (mic → speaker, no WebSocket)")
@@ -184,13 +183,6 @@ class GeminiLiveClient @Inject constructor() {
         }
     }
 
-    /**
-     * Sends an empty user turn after setupComplete to trigger Gemini's opening greeting.
-     *
-     * Without this, Gemini waits for audio input before speaking. For phone call
-     * reception, the AI must answer first — this empty turn acts as the "phone picked up"
-     * signal that triggers the greeting defined in the system instruction.
-     */
     private fun sendInitialTurn() {
         val json = """{"client_content":{"turns":[{"role":"user","parts":[{"text":""}]}],"turn_complete":true}}"""
         webSocket?.send(json)
@@ -199,12 +191,10 @@ class GeminiLiveClient @Inject constructor() {
 
     /**
      * Sends a PCM audio chunk to Gemini.
-     * Audio must be 16kHz 16-bit mono (matches Gemini Live realtime input format).
-     *
-     * The PCM bytes are base64-encoded and wrapped in the Gemini realtimeInput JSON envelope.
+     * Audio must be 16kHz 16-bit mono. Wrapped in Gemini realtimeInput JSON envelope.
      *
      * @param pcmData Raw PCM bytes
-     * @param size    Number of valid bytes in pcmData (may be less than pcmData.size)
+     * @param size    Number of valid bytes in pcmData
      */
     fun sendAudio(pcmData: ByteArray, size: Int) {
         if (!isConnected || webSocket == null) return
@@ -213,11 +203,12 @@ class GeminiLiveClient @Inject constructor() {
         val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
 
         val json = buildString {
-            append("""{"realtimeInput":{"audio":{"mimeType":"audio/pcm;rate=16000","data":""")
+            append("""{"realtimeInput":{"mediaChunks":[{"mimeType":"audio/pcm;rate=16000","data":""")
             append('"')
             append(b64)
             append('"')
-            append("}}}")
+            append("}]}")
+            append("}")
         }
 
         webSocket?.send(json)
@@ -226,7 +217,7 @@ class GeminiLiveClient @Inject constructor() {
     /**
      * Sends a tool result back to Gemini after backend execution.
      *
-     * @param callId  The id from the original tool_call message
+     * @param callId  The id from the original toolCall message
      * @param result  JSON string with the tool result
      */
     fun sendToolResult(callId: String, result: String) {
@@ -238,24 +229,11 @@ class GeminiLiveClient @Inject constructor() {
     }
 
     /**
-     * Injects a system message into the conversation as a user turn.
-     * Used to send timed warnings (e.g. "30 seconds remaining") without user speech.
-     */
-    fun sendSystemMessage(text: String) {
-        if (!isConnected || webSocket == null) return
-        val escaped = text.replace("\\", "\\\\").replace("\"", "\\\"")
-        val json = """{"client_content":{"turns":[{"role":"user","parts":[{"text":"$escaped"}]}],"turn_complete":true}}"""
-        webSocket?.send(json)
-        Log.d(TAG, "System message injected: ${text.take(80)}")
-    }
-
-    /**
      * Closes the WebSocket (or stops echo loopback).
      */
     fun disconnect() {
         isConnected = false
 
-        // Stop echo loopback if active
         echoLoopbackJob?.cancel()
         echoLoopbackJob = null
         echoScope = null
@@ -271,7 +249,6 @@ class GeminiLiveClient @Inject constructor() {
 
     /**
      * Sends the BidiGenerateContent setup message after WebSocket connection.
-     * Configures model, generation_config, optional system_instruction, and tools.
      */
     private fun sendSetupMessage(
         ws: WebSocket,
@@ -297,7 +274,6 @@ class GeminiLiveClient @Inject constructor() {
             genConfig.add("speech_config", speechConfig)
             setup.add("generation_config", genConfig)
 
-            // Automatic activity detection (VAD) — let Gemini decide turn boundaries
             val realtimeInputConfig = JsonObject()
             val aad = JsonObject()
             aad.addProperty("disabled", false)
@@ -334,11 +310,11 @@ class GeminiLiveClient @Inject constructor() {
     }
 
     /**
-     * Dispatches Gemini JSON messages to the appropriate handler.
+     * Dispatches Gemini JSON messages.
      *
      * Expected top-level keys:
      *   "setupComplete" — session ready
-     *   "serverContent" — contains model turn with audio/text parts
+     *   "serverContent" — audio/text parts from model
      *   "toolCall"      — function call request
      *   "toolCallCancellation" — cancel pending tool call
      */
@@ -349,8 +325,6 @@ class GeminiLiveClient @Inject constructor() {
             when {
                 root.has("setupComplete") -> {
                     Log.i(TAG, "Gemini session setup complete")
-                    // Trigger Gemini to speak first — send an empty user turn so the model
-                    // immediately delivers its opening greeting instead of waiting for audio.
                     sendInitialTurn()
                 }
 
@@ -367,7 +341,7 @@ class GeminiLiveClient @Inject constructor() {
                 }
 
                 else -> {
-                    Log.d(TAG, "Unhandled Gemini message key: ${root.keySet()} (${text.take(100)})")
+                    Log.d(TAG, "Unhandled Gemini message: ${root.keySet()} (${text.take(100)})")
                 }
             }
         } catch (e: Exception) {
@@ -376,14 +350,9 @@ class GeminiLiveClient @Inject constructor() {
     }
 
     /**
-     * Parses serverContent and extracts audio chunks or text from modelTurn.
+     * Parses serverContent and extracts audio chunks from modelTurn.
      *
-     * Audio path:
-     *   serverContent.modelTurn.parts[].inlineData.data → base64 decode → emit to audioResponseFlow
-     *
-     * Also handles:
-     *   serverContent.turnComplete → log (VAD turn boundary)
-     *   serverContent.interrupted  → log (barge-in detected)
+     * Audio: serverContent.modelTurn.parts[].inlineData.data → base64 decode → audioResponseFlow
      */
     private fun handleServerContent(serverContent: JsonObject) {
         val turnComplete = serverContent.get("turnComplete")?.asBoolean ?: false
@@ -417,7 +386,6 @@ class GeminiLiveClient @Inject constructor() {
                 continue
             }
 
-            // Text part — log for debugging (transcript, etc.)
             val text = part.get("text")?.asString
             if (text != null) {
                 Log.v(TAG, "Model text: ${text.take(120)}")
@@ -427,9 +395,6 @@ class GeminiLiveClient @Inject constructor() {
 
     /**
      * Parses a toolCall message and emits to [toolCallFlow].
-     *
-     * Expected structure:
-     *   toolCall.functionCalls[].{id, name, args}
      */
     private fun handleToolCall(toolCallObj: JsonObject) {
         val functionCalls = toolCallObj.getAsJsonArray("functionCalls") ?: return

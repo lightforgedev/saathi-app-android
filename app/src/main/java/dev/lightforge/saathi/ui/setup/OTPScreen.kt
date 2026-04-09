@@ -27,14 +27,16 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.lightforge.saathi.R
 
 /**
- * Phone number entry — step 1 of device pairing onboarding.
+ * OTP verification — step 2 of device pairing onboarding.
  *
- * Calls POST /devices/pair. On success navigates to OTPScreen with pairing_id.
+ * Receives pairing_id from SetupScreen via navigation arg.
+ * Calls POST /devices/verify. On success stores device_token and navigates to PermissionsScreen.
  */
 @Composable
-fun SetupScreen(
-    onOtpSent: (pairingId: String) -> Unit,
-    viewModel: SetupViewModel = hiltViewModel()
+fun OTPScreen(
+    pairingId: String,
+    onVerified: () -> Unit,
+    viewModel: OTPViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
@@ -52,28 +54,32 @@ fun SetupScreen(
             color = MaterialTheme.colorScheme.primary
         )
 
-        Text(
-            text = "AI Voice Assistant for Your Restaurant",
-            style = MaterialTheme.typography.bodyLarge,
-            textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 8.dp, bottom = 48.dp)
-        )
+        Spacer(modifier = Modifier.height(48.dp))
 
         Text(
-            text = "Apna restaurant ka phone number daalein",
-            style = MaterialTheme.typography.titleMedium,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(bottom = 16.dp)
+            text = stringResource(R.string.otp_title),
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.SemiBold
         )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = stringResource(R.string.otp_hint),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 16.dp)
+        )
+
+        Spacer(modifier = Modifier.height(32.dp))
 
         OutlinedTextField(
-            value = uiState.phoneNumber,
-            onValueChange = { viewModel.onPhoneChanged(it) },
-            label = { Text(stringResource(R.string.setup_phone_label)) },
-            placeholder = { Text(stringResource(R.string.setup_phone_hint)) },
-            prefix = { Text("+91 ") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+            value = uiState.otp,
+            onValueChange = { viewModel.onOtpChanged(it) },
+            label = { Text(stringResource(R.string.otp_label)) },
+            placeholder = { Text("123456") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
             singleLine = true,
             isError = uiState.error != null,
             modifier = Modifier.fillMaxWidth()
@@ -91,8 +97,8 @@ fun SetupScreen(
         Spacer(modifier = Modifier.height(24.dp))
 
         Button(
-            onClick = { viewModel.sendOtp(onSuccess = onOtpSent) },
-            enabled = uiState.phoneNumber.length >= 10 && !uiState.isLoading,
+            onClick = { viewModel.verify(pairingId, onSuccess = onVerified) },
+            enabled = uiState.otp.length == 6 && !uiState.isLoading,
             modifier = Modifier.fillMaxWidth()
         ) {
             if (uiState.isLoading) {
@@ -102,7 +108,7 @@ fun SetupScreen(
                     strokeWidth = 2.dp
                 )
             } else {
-                Text(stringResource(R.string.setup_send_otp))
+                Text(stringResource(R.string.otp_verify_button))
             }
         }
     }

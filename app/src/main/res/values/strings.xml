@@ -31,6 +31,81 @@
     <string name="home_paused_subtitle">Calls will go to voicemail</string>
     <string name="home_today">Today</string>
     <string name="home_stat_calls">Calls</string>
-    <string name="home_stat_duration">Avg Duration</string>
-    <string name="home_stat_actions">Actions</string>
+    <string name="home_stat_duration">Last Call</string>
+    <string name="home_stat_actions">Reservations</string>
+    <string name="home_footer_active">saathi.help hameshaa active hai</string>
+    <string name="home_recent_callers">Recent Callers</string>
+    <string name="home_tab_home">Home</string>
+    <string name="home_tab_calllog">Call Log</string>
+    <string name="home_tab_settings">Settings</string>
+
+    <!-- OTP screen -->
+    <string name="otp_title">OTP enter karein</string>
+    <string name="otp_hint">OTP aapke phone pe SMS pe aaya hai</string>
+    <string name="otp_verify_button">Verify karein</string>
+    <string name="otp_label">6-digit OTP</string>
+
+    <!-- Permissions screen -->
+    <string name="permissions_title">Permissions dein</string>
+    <string name="permissions_subtitle">Saathi ko calls handle karne ke liye ye permissions chahiye</string>
+    <string name="permissions_calls">Phone Calls</string>
+    <string name="permissions_calls_desc">Calls receive aur manage karne ke liye</string>
+    <string name="permissions_microphone">Microphone</string>
+    <string name="permissions_microphone_desc">Caller se baat karne ke liye</string>
+    <string name="permissions_notifications">Notifications</string>
+    <string name="permissions_notifications_desc">Call alerts aur summaries ke liye</string>
+    <string name="permissions_phone_state">Phone State</string>
+    <string name="permissions_phone_state_desc">Call status track karne ke liye</string>
+    <string name="permissions_grant_button">Permissions grant karein</string>
+
+    <!-- Battery optimization screen -->
+    <string name="battery_title">Battery Optimization</string>
+    <string name="battery_subtitle">Saathi ko background mein active rakhne ke liye</string>
+    <string name="battery_step1">Settings kholein</string>
+    <string name="battery_step2">Apps ya Application Manager pe jaein</string>
+    <string name="battery_step3">Saathi dhundein</string>
+    <string name="battery_step4">Battery restriction: Off karein</string>
+    <string name="battery_samsung_note">Samsung: Settings → Device Care → Battery → Background usage limits → Saathi off karein</string>
+    <string name="battery_xiaomi_note">Xiaomi/Redmi: Settings → Apps → Saathi → Battery saver → No restriction</string>
+    <string name="battery_start_button">Shuru karein!</string>
+
+    <!-- Call log screen -->
+    <string name="calllog_title">Call Log</string>
+    <string name="calllog_empty">Abhi tak koi call nahi</string>
+    <string name="calllog_today">Aaj</string>
+    <string name="calllog_yesterday">Kal</string>
+    <string name="calllog_earlier">Pehle</string>
+    <string name="calllog_outcome_resolved">Resolved</string>
+    <string name="calllog_outcome_escalated">Escalated</string>
+    <string name="calllog_outcome_missed">Missed</string>
+    <string name="calllog_outcome_abandoned">Abandoned</string>
+    <string name="calllog_load_more">Aur load karein</string>
+
+    <!-- Settings screen -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_call_mode">Call Handling Mode</string>
+    <string name="settings_call_mode_full_auto">Full Auto</string>
+    <string name="settings_call_mode_busy">Busy + No Answer</string>
+    <string name="settings_call_mode_off">Off</string>
+    <string name="settings_business_hours">Business Hours</string>
+    <string name="settings_language">Greeting Language</string>
+    <string name="settings_language_auto">Auto detect</string>
+    <string name="settings_language_hindi">Hindi</string>
+    <string name="settings_language_english">English</string>
+    <string name="settings_notifications">Notifications</string>
+    <string name="settings_whatsapp_summary">WhatsApp daily summary</string>
+    <string name="settings_per_call">Per-call notification</string>
+    <string name="settings_save">Save karein</string>
+    <string name="settings_saved">Settings saved!</string>
+    <string name="settings_error">Save nahi ho saka. Try karein.</string>
+    <string name="settings_monday">Somvar</string>
+    <string name="settings_tuesday">Mangalvar</string>
+    <string name="settings_wednesday">Budhvar</string>
+    <string name="settings_thursday">Guruvar</string>
+    <string name="settings_friday">Shukravar</string>
+    <string name="settings_saturday">Shanivar</string>
+    <string name="settings_sunday">Ravivar</string>
+    <string name="settings_closed">Band</string>
+    <string name="settings_open">Open</string>
+    <string name="settings_restaurant">Restaurant</string>
 </resources>
