@@ -14,6 +14,7 @@ import dev.lightforge.saathi.telecom.SaathiConnectionService
 import dev.lightforge.saathi.voice.AudioPipeline
 import dev.lightforge.saathi.voice.GeminiLiveClient
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -233,6 +234,25 @@ class SpikeTestViewModel(application: Application) : AndroidViewModel(applicatio
                 if (started) {
                     _state.update { it.copy(audioRecordState = "RECORDING") }
                     log("Live session active — speak to talk to Gemini")
+
+                    // Call timer: warn at (maxDuration - 30)s, hard-end at maxDuration
+                    val maxDuration = session.config.max_duration_seconds.toLong()
+                    val warnAfter = (maxDuration - 30).coerceAtLeast(30)
+                    launch {
+                        delay(warnAfter * 1000)
+                        if (_state.value.callActive) {
+                            client.sendSystemMessage(
+                                "[System: Only 30 seconds remaining in this call. " +
+                                "Please wrap up the conversation politely and say goodbye to the caller.]"
+                            )
+                            log("30s warning sent to Gemini")
+                        }
+                        delay(30_000)
+                        if (_state.value.callActive) {
+                            log("Max call duration reached — ending call")
+                            endCall()
+                        }
+                    }
                 } else {
                     log("ERROR: AudioPipeline failed to start")
                     client.disconnect()
