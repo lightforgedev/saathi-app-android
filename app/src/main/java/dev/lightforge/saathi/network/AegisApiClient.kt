@@ -143,17 +143,28 @@ data class VerifyRequest(
 data class VerifyResponse(
     val device_token: String,
     val org_id: String,
-    val restaurant_name: String
+    val restaurant: RestaurantSummaryDto,
+    val device_id: String? = null,
+    val token_expires_at: String? = null
+)
+
+data class RestaurantSummaryDto(
+    val name: String,
+    val phone: String? = null,
+    val city: String? = null
 )
 
 data class SessionRequest(
     val caller_number: String,
-    val direction: String // "incoming" or "outgoing"
+    val direction: String, // "incoming" or "outgoing"
+    val device_id: String
 )
 
 data class SessionResponse(
     val session_id: String,
+    val session_token: String,
     val gemini_token: String,
+    val gemini_ws_url: String,
     val system_instruction: String,
     val tools: List<ToolDeclarationDto>,
     val config: SessionConfig
@@ -173,7 +184,19 @@ data class ToolParameterDto(
 data class SessionConfig(
     val language: String,
     val voice_name: String,
-    val restaurant_name: String
+    val max_duration_seconds: Int = 180,
+    val vad_enabled: Boolean = true
+)
+
+data class ToolCallRequest(
+    val tool_name: String,
+    val tool_call_id: String,
+    val arguments: Map<String, Any?>
+)
+
+data class ToolCallResponse(
+    val tool_call_id: String,
+    val result: Any?
 )
 
 data class SessionEndRequest(

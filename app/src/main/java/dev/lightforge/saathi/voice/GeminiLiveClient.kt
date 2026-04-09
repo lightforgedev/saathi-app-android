@@ -50,7 +50,7 @@ class GeminiLiveClient @Inject constructor() {
         private const val CONNECT_TIMEOUT_SEC = 10L
         private const val READ_TIMEOUT_SEC = 0L   // no timeout — streaming connection
         private const val PING_INTERVAL_SEC = 15L
-        private const val DEFAULT_MODEL = "models/gemini-2.0-flash-live-001"
+        private const val DEFAULT_MODEL = "models/gemini-3.1-flash-live-preview"
         private const val DEFAULT_VOICE = "Aoede"
     }
 
