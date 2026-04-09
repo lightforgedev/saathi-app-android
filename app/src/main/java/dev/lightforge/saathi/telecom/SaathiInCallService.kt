@@ -142,6 +142,7 @@ class SaathiInCallService : InCallService() {
                 }
 
                 Log.i(TAG, "Session created: ${sessionResp.session_id}")
+                Log.d(TAG, "gemini_ws_url host: ${try { java.net.URI(sessionResp.gemini_ws_url).host } catch (e: Exception) { "parse-error: ${e.message}" }}")
 
                 // Start AudioPipeline + GeminiLiveClient
                 val pipeline = AudioPipeline(applicationContext)
@@ -149,7 +150,8 @@ class SaathiInCallService : InCallService() {
 
                 geminiClient.connect(
                     geminiWsUrl = sessionResp.gemini_ws_url,
-                    systemInstruction = sessionResp.system_instruction
+                    systemInstruction = sessionResp.system_instruction,
+                    onEvent = { event -> Log.i(TAG, "Gemini: $event") }
                 )
 
                 // Collect Gemini audio → local speaker (owner can monitor; caller hears via backend)
@@ -209,7 +211,9 @@ class SaathiInCallService : InCallService() {
                     SessionEndRequest(
                         duration_ms = durationMs,
                         tool_calls = 0,
-                        disconnect_reason = "call_ended"
+                        disconnect_reason = "call_ended",
+                        caller_number = callerNumber,
+                        outcome = "unclear"
                     )
                 )
                 Log.i(TAG, "Session ended: $sessionId (${durationMs}ms)")

@@ -50,7 +50,7 @@ class GeminiLiveClient @Inject constructor() {
         private const val CONNECT_TIMEOUT_SEC = 10L
         private const val READ_TIMEOUT_SEC = 0L   // no timeout — streaming connection
         private const val PING_INTERVAL_SEC = 15L
-        private const val DEFAULT_MODEL = "models/gemini-3.1-flash-live-preview"
+        private const val DEFAULT_MODEL = "models/gemini-2.0-flash-live-001"
         private const val DEFAULT_VOICE = "Aoede"
     }
 
@@ -59,6 +59,9 @@ class GeminiLiveClient @Inject constructor() {
 
     @Volatile
     private var isConnected = false
+
+    @Volatile
+    private var isSetupComplete = false
 
     // Echo mode — loopback job instead of WebSocket
     private var echoLoopbackJob: Job? = null
@@ -157,6 +160,7 @@ class GeminiLiveClient @Inject constructor() {
                 Log.i(TAG, "WebSocket closed: $code $reason")
                 onEvent?.invoke("WS closed: $code ${reason.take(60)}")
                 isConnected = false
+                isSetupComplete = false
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
@@ -164,6 +168,7 @@ class GeminiLiveClient @Inject constructor() {
                 Log.e(TAG, "WebSocket FAILED: ${t.message} (http=$httpCode)", t)
                 onEvent?.invoke("WS FAILED http=$httpCode: ${t.message?.take(80)}")
                 isConnected = false
+                isSetupComplete = false
             }
         })
     }
@@ -202,17 +207,17 @@ class GeminiLiveClient @Inject constructor() {
      * @param size    Number of valid bytes in pcmData
      */
     fun sendAudio(pcmData: ByteArray, size: Int) {
-        if (!isConnected || webSocket == null) return
+        if (!isSetupComplete || webSocket == null) return
 
         val bytes = if (size < pcmData.size) pcmData.copyOf(size) else pcmData
         val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
 
         val json = buildString {
-            append("""{"realtimeInput":{"audio":{"mimeType":"audio/pcm;rate=16000","data":""")
+            append("""{"realtimeInput":{"mediaChunks":[{"mimeType":"audio/pcm;rate=16000","data":""")
             append('"')
             append(b64)
             append('"')
-            append("}}}")
+            append("}]}}")
         }
 
         webSocket?.send(json)
@@ -251,6 +256,7 @@ class GeminiLiveClient @Inject constructor() {
      */
     fun disconnect() {
         isConnected = false
+        isSetupComplete = false
 
         echoLoopbackJob?.cancel()
         echoLoopbackJob = null
@@ -342,7 +348,8 @@ class GeminiLiveClient @Inject constructor() {
 
             when {
                 root.has("setupComplete") -> {
-                    Log.i(TAG, "Gemini session setup complete")
+                    Log.i(TAG, "Gemini session setup complete — ready for audio")
+                    isSetupComplete = true
                     sendInitialTurn()
                 }
 

@@ -199,7 +199,9 @@ data class ToolCallResponse(
 data class SessionEndRequest(
     val duration_ms: Long,
     val tool_calls: Int,
-    val disconnect_reason: String
+    val disconnect_reason: String,
+    val caller_number: String? = null,
+    val outcome: String = "unclear"
 )
 
 data class ConfigResponse(
