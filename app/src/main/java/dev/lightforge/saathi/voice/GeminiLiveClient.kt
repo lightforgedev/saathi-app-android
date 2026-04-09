@@ -183,6 +183,12 @@ class GeminiLiveClient @Inject constructor() {
         }
     }
 
+    private fun sendInitialTurn() {
+        val json = """{"client_content":{"turns":[{"role":"user","parts":[{"text":""}]}],"turn_complete":true}}"""
+        webSocket?.send(json)
+        Log.d(TAG, "Initial turn sent — awaiting Gemini greeting")
+    }
+
     /**
      * Sends a PCM audio chunk to Gemini.
      * Audio must be 16kHz 16-bit mono. Wrapped in Gemini realtimeInput JSON envelope.
@@ -319,6 +325,7 @@ class GeminiLiveClient @Inject constructor() {
             when {
                 root.has("setupComplete") -> {
                     Log.i(TAG, "Gemini session setup complete")
+                    sendInitialTurn()
                 }
 
                 root.has("serverContent") -> {
