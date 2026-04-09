@@ -27,7 +27,7 @@ import javax.inject.Inject
  * WebSocket client for the Gemini Live API (bidirectional audio streaming).
  *
  * Protocol (text frames only — Gemini Live uses JSON, not raw binary):
- *   Client → server: {"setup":{...}}, {"realtimeInput":{"mediaChunks":[{"mimeType":"audio/pcm;rate=16000","data":"<base64>"}]}}
+ *   Client → server: {"setup":{...}}, {"realtimeInput":{"audio":{"mimeType":"audio/pcm;rate=16000","data":"<base64>"}}}
  *   Server → client: {"setupComplete":{}}, {"serverContent":{"modelTurn":{"parts":[{"inlineData":{"mimeType":"audio/pcm;rate=24000","data":"<base64>"}}]}}},
  *                    {"toolCall":{"functionCalls":[{"id":"...","name":"...","args":{...}}]}}
  *
@@ -47,7 +47,7 @@ class GeminiLiveClient @Inject constructor() {
         private const val CONNECT_TIMEOUT_SEC = 10L
         private const val READ_TIMEOUT_SEC = 0L   // no timeout — streaming connection
         private const val PING_INTERVAL_SEC = 15L
-        private const val DEFAULT_MODEL = "models/gemini-2.0-flash-live-001"
+        private const val DEFAULT_MODEL = "models/gemini-3.1-flash-live-preview"
         private const val DEFAULT_VOICE = "Aoede"
     }
 
@@ -131,9 +131,13 @@ class GeminiLiveClient @Inject constructor() {
                 handleTextMessage(text)
             }
 
-            // Gemini Live uses JSON text frames only; binary frames are unexpected
+            // Gemini Live (v1alpha) sends responses as binary frames (UTF-8 encoded JSON)
             override fun onMessage(ws: WebSocket, bytes: ByteString) {
-                Log.w(TAG, "Unexpected binary frame (${bytes.size} bytes) — ignoring")
+                val text = bytes.utf8()
+                if (text.contains("setupComplete")) {
+                    onEvent?.invoke("Gemini ready — speak now")
+                }
+                handleTextMessage(text)
             }
 
             override fun onClosing(ws: WebSocket, code: Int, reason: String) {
@@ -196,12 +200,11 @@ class GeminiLiveClient @Inject constructor() {
         val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
 
         val json = buildString {
-            append("""{"realtimeInput":{"mediaChunks":[{"mimeType":"audio/pcm;rate=16000","data":""")
+            append("""{"realtimeInput":{"audio":{"mimeType":"audio/pcm;rate=16000","data":""")
             append('"')
             append(b64)
             append('"')
-            append("}]}")
-            append("}")
+            append("}}}")
         }
 
         webSocket?.send(json)
