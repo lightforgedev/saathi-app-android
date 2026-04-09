@@ -6,6 +6,9 @@ import android.telecom.TelecomManager
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import dev.lightforge.saathi.BuildConfig
+import dev.lightforge.saathi.network.AegisApiClient
+import dev.lightforge.saathi.network.SessionRequest
 import dev.lightforge.saathi.telecom.PhoneAccountManager
 import dev.lightforge.saathi.telecom.SaathiConnectionService
 import dev.lightforge.saathi.voice.AudioPipeline
@@ -16,6 +19,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import okhttp3.OkHttpClient
+import okhttp3.logging.HttpLoggingInterceptor
+import retrofit2.Retrofit
+import retrofit2.converter.gson.GsonConverterFactory
 import kotlin.math.log10
 import kotlin.math.sqrt
 
@@ -35,6 +42,13 @@ class SpikeTestViewModel(application: Application) : AndroidViewModel(applicatio
         private const val TAG = "SpikeTestViewModel"
         private const val FAKE_CALLER_NUMBER = "+919876500001"
         private const val FAKE_CALLER_NAME = "Spike Test Caller"
+
+        // Hardcoded spike device token — generated via POST /devices/pair + /devices/verify
+        // during local dev setup. Valid 90 days. Replace if server secret key changes.
+        // Device: bfd544d0-9403-49ac-8e7e-71e5a6dab24f  Org: 152408 3f-5954-4bd8-bef2-1081139629de
+        private const val SPIKE_DEVICE_TOKEN =
+            "SFMyNTY.g2gDdAAAAAN3Bm9yZ19pZG0AAAAkMTUyNDA4M2YtNTk1NC00YmQ4LWJlZjItMTA4MTEzOTYyOWRldwRyb2xlbQAAAA1zYWF0aGlfZGV2aWNldwlkZXZpY2VfaWRtAAAAJGJmZDU0NGQwLTk0MDMtNDlhYy04ZTdlLTcxZTVhNmRhYjI0Zm4GAOHXfXCdAWIAAVGA.vosHwSOPQk4dZvubVw9B_HWT-jJVw1tOI5sKT1xLrNw"
+        private const val SPIKE_DEVICE_ID = "bfd544d0-9403-49ac-8e7e-71e5a6dab24f"
     }
 
     data class UiState(
@@ -81,20 +95,12 @@ class SpikeTestViewModel(application: Application) : AndroidViewModel(applicatio
         if (_state.value.callActive) return
         log("Simulating incoming call from $FAKE_CALLER_NUMBER")
 
-        if (_state.value.phoneAccountReady && !_state.value.echoMode) {
-            // Production path: route through Telecom for real call interception
-            phoneAccountManager.reportIncomingCall(
-                callerNumber = FAKE_CALLER_NUMBER,
-                callerName = FAKE_CALLER_NAME,
-                sessionId = "spike-${System.currentTimeMillis()}",
-                echoMode = false
-            )
-            _state.update { it.copy(callActive = true) }
-            log("Reported to Telecom — answer via system call notification")
-        } else {
-            // Echo mode: bypass Telecom entirely — tests audio pipeline directly
-            log(if (_state.value.echoMode) "Echo mode — running direct loopback" else "PhoneAccount not ready — running direct loopback")
+        if (_state.value.echoMode) {
+            log("Echo mode — running direct loopback")
             startDirectLoopback()
+        } else {
+            log("Live mode — connecting to backend at ${BuildConfig.AEGIS_API_BASE_URL}")
+            startLiveSession()
         }
     }
 
@@ -138,6 +144,98 @@ class SpikeTestViewModel(application: Application) : AndroidViewModel(applicatio
             client.disconnect()
             directPipeline = null
             directGeminiClient = null
+        }
+    }
+
+    /**
+     * Live mode: calls POST /session, gets gemini_ws_url, connects AudioPipeline + Gemini.
+     * Bypasses Telecom entirely — works on Samsung One UI where self-managed calls are rejected.
+     */
+    private fun startLiveSession() {
+        val context = getApplication<Application>()
+        val pipeline = AudioPipeline(context)
+        val client = GeminiLiveClient()
+
+        directPipeline = pipeline
+        directGeminiClient = client
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                // Build a minimal Retrofit client with spike device token auth
+                val logging = HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BODY }
+                val okHttp = OkHttpClient.Builder()
+                    .addInterceptor(logging)
+                    .addInterceptor { chain ->
+                        val request = chain.request().newBuilder()
+                            .addHeader("Authorization", "Bearer $SPIKE_DEVICE_TOKEN")
+                            .build()
+                        chain.proceed(request)
+                    }
+                    .build()
+                val api = Retrofit.Builder()
+                    .baseUrl("${BuildConfig.AEGIS_API_BASE_URL}/api/v1/saathi/")
+                    .client(okHttp)
+                    .addConverterFactory(GsonConverterFactory.create())
+                    .build()
+                    .create(AegisApiClient::class.java)
+
+                log("POST /session → ${BuildConfig.AEGIS_API_BASE_URL}")
+                val response = api.createSession(
+                    SessionRequest(
+                        caller_number = FAKE_CALLER_NUMBER,
+                        direction = "incoming",
+                        device_id = SPIKE_DEVICE_ID
+                    )
+                )
+
+                if (!response.isSuccessful) {
+                    log("ERROR: /session returned ${response.code()} ${response.message()}")
+                    return@launch
+                }
+
+                val session = response.body()!!
+                log("Session created: ${session.session_id}")
+                log("Connecting to Gemini WebSocket…")
+                _state.update { it.copy(webSocketState = "CONNECTING") }
+
+                client.connect(
+                    geminiWsUrl = session.gemini_ws_url,
+                    systemInstruction = session.system_instruction
+                )
+                _state.update { it.copy(webSocketState = "CONNECTED", callActive = true) }
+
+                // Collect Gemini audio responses → speaker
+                launch {
+                    client.audioResponseFlow.collect { pcmData ->
+                        pipeline.playAudio(pcmData)
+                        _state.update { it.copy(audioTrackState = "PLAYING") }
+                    }
+                }
+
+                // Start mic capture → send to Gemini
+                val started = pipeline.start(
+                    onAudioCaptured = { pcmData, size ->
+                        frameCount++
+                        updateDbMeter(pcmData, size)
+                        client.sendAudio(pcmData, size)
+                    }
+                )
+
+                if (started) {
+                    _state.update { it.copy(audioRecordState = "RECORDING") }
+                    log("Live session active — speak to talk to Gemini")
+                } else {
+                    log("ERROR: AudioPipeline failed to start")
+                    client.disconnect()
+                    directPipeline = null
+                    directGeminiClient = null
+                }
+            } catch (e: Exception) {
+                log("ERROR: ${e.message}")
+                Log.e(TAG, "Live session failed", e)
+                directPipeline = null
+                directGeminiClient = null
+            }
         }
     }
 
