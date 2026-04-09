@@ -14,34 +14,37 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BatteryFull
+import androidx.compose.material.icons.filled.BatteryAlert
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import dev.lightforge.saathi.R
+import dev.lightforge.saathi.ui.theme.SaathiGreen
+import dev.lightforge.saathi.ui.theme.SaathiGreenDim
+import dev.lightforge.saathi.ui.theme.SaathiSurface
+import dev.lightforge.saathi.ui.theme.SaathiSurface2
+import dev.lightforge.saathi.ui.theme.SaathiTextSecondary
 
 /**
  * Battery optimization guidance — step 4 of onboarding.
- *
- * Detects OEM from Build.MANUFACTURER and shows device-specific steps.
- * Samsung and Xiaomi/Redmi get tailored instructions.
- * All others get generic Android steps.
  */
 @Composable
 fun BatteryOptimizationScreen(onContinue: () -> Unit) {
     val manufacturer = Build.MANUFACTURER.lowercase()
-
     val isSamsung = manufacturer.contains("samsung")
     val isXiaomi = manufacturer.contains("xiaomi") || manufacturer.contains("redmi") || manufacturer.contains("poco")
 
@@ -52,65 +55,110 @@ fun BatteryOptimizationScreen(onContinue: () -> Unit) {
         stringResource(R.string.battery_step4)
     )
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(32.dp)
-            .verticalScroll(rememberScrollState()),
-        horizontalAlignment = Alignment.CenterHorizontally
+            .background(MaterialTheme.colorScheme.background)
+            .padding(horizontal = 28.dp)
     ) {
-        Spacer(modifier = Modifier.height(40.dp))
-
-        Icon(
-            imageVector = Icons.Default.BatteryFull,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(64.dp)
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = stringResource(R.string.battery_title),
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.SemiBold
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Text(
-            text = stringResource(R.string.battery_subtitle),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        // OEM-specific note
-        when {
-            isSamsung -> {
-                OemNoteCard(text = stringResource(R.string.battery_samsung_note))
-                Spacer(modifier = Modifier.height(16.dp))
-            }
-            isXiaomi -> {
-                OemNoteCard(text = stringResource(R.string.battery_xiaomi_note))
-                Spacer(modifier = Modifier.height(16.dp))
-            }
-        }
-
-        // Numbered steps
-        genericSteps.forEachIndexed { index, step ->
-            StepRow(number = index + 1, text = step)
-            Spacer(modifier = Modifier.height(12.dp))
-        }
-
-        Spacer(modifier = Modifier.height(40.dp))
-
-        Button(
-            onClick = onContinue,
-            modifier = Modifier.fillMaxWidth()
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(stringResource(R.string.battery_start_button))
+            Spacer(modifier = Modifier.height(48.dp))
+
+            // Icon
+            Box(
+                modifier = Modifier
+                    .size(64.dp)
+                    .background(SaathiGreen.copy(alpha = 0.12f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.BatteryAlert,
+                    contentDescription = null,
+                    tint = SaathiGreen,
+                    modifier = Modifier.size(32.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            Text(
+                text = stringResource(R.string.battery_title),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Text(
+                text = stringResource(R.string.battery_subtitle),
+                style = MaterialTheme.typography.bodyMedium,
+                color = SaathiTextSecondary,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // OEM-specific note
+            if (isSamsung || isXiaomi) {
+                val oemText = if (isSamsung) stringResource(R.string.battery_samsung_note)
+                              else stringResource(R.string.battery_xiaomi_note)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(SaathiGreenDim.copy(alpha = 0.2f), RoundedCornerShape(10.dp))
+                        .padding(14.dp)
+                ) {
+                    Text(
+                        text = oemText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = SaathiGreen,
+                        textAlign = TextAlign.Start
+                    )
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+
+            // Steps card
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SaathiSurface, RoundedCornerShape(14.dp))
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                genericSteps.forEachIndexed { index, step ->
+                    StepRow(number = index + 1, text = step)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            Button(
+                onClick = onContinue,
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = SaathiGreen,
+                    contentColor = Color.Black
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp)
+            ) {
+                Text(
+                    text = stringResource(R.string.battery_start_button),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp
+                )
+            }
+
+            Spacer(modifier = Modifier.height(32.dp))
         }
     }
 }
@@ -119,43 +167,27 @@ fun BatteryOptimizationScreen(onContinue: () -> Unit) {
 private fun StepRow(number: Int, text: String) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Box(
             modifier = Modifier
-                .size(32.dp)
-                .background(MaterialTheme.colorScheme.primary, CircleShape),
+                .size(28.dp)
+                .background(SaathiGreen, CircleShape),
             contentAlignment = Alignment.Center
         ) {
             Text(
                 text = "$number",
-                color = MaterialTheme.colorScheme.onPrimary,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold
+                color = Color.Black,
+                fontWeight = FontWeight.Bold,
+                fontSize = 12.sp
             )
         }
         Text(
             text = text,
             style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onBackground,
             modifier = Modifier.weight(1f)
-        )
-    }
-}
-
-@Composable
-private fun OemNoteCard(text: String) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer
-        )
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onPrimaryContainer,
-            modifier = Modifier.padding(16.dp)
         )
     }
 }

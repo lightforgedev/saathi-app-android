@@ -1,5 +1,6 @@
 package dev.lightforge.saathi.ui.calllog
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,6 +14,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.CallMade
@@ -20,17 +23,16 @@ import androidx.compose.material.icons.automirrored.filled.CallMissed
 import androidx.compose.material.icons.automirrored.filled.CallReceived
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.WarningAmber
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -42,18 +44,21 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.lightforge.saathi.R
 import dev.lightforge.saathi.network.CallRecord
+import dev.lightforge.saathi.ui.theme.SaathiBorder
+import dev.lightforge.saathi.ui.theme.SaathiGreen
+import dev.lightforge.saathi.ui.theme.SaathiSurface
+import dev.lightforge.saathi.ui.theme.SaathiSurface2
+import dev.lightforge.saathi.ui.theme.SaathiTextSecondary
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 
-private val ActiveGreen = Color(0xFF4CAF50)
-
 /**
- * Paginated call history screen, grouped by date (today / yesterday / earlier).
- * Infinite scroll with cursor pagination.
+ * Paginated call history screen, grouped by date.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,7 +69,6 @@ fun CallLogScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
 
-    // Trigger load-more when scrolled near end
     val shouldLoadMore by remember {
         derivedStateOf {
             val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
@@ -77,15 +81,33 @@ fun CallLogScreen(
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.calllog_title)) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                }
-            )
+            Column {
+                TopAppBar(
+                    title = {
+                        Text(
+                            text = stringResource(R.string.calllog_title),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back",
+                                tint = MaterialTheme.colorScheme.onBackground
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background
+                    )
+                )
+                HorizontalDivider(color = SaathiBorder, thickness = 0.5.dp)
+            }
         }
     ) { paddingValues ->
         when {
@@ -96,7 +118,7 @@ fun CallLogScreen(
                         .padding(paddingValues),
                     contentAlignment = Alignment.Center
                 ) {
-                    CircularProgressIndicator()
+                    CircularProgressIndicator(color = SaathiGreen)
                 }
             }
 
@@ -110,7 +132,7 @@ fun CallLogScreen(
                     Text(
                         text = stringResource(R.string.calllog_empty),
                         style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = SaathiTextSecondary
                     )
                 }
             }
@@ -122,21 +144,21 @@ fun CallLogScreen(
                         .fillMaxSize()
                         .padding(paddingValues)
                         .padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     uiState.groupedCalls.forEach { (group, calls) ->
                         item {
-                            Spacer(modifier = Modifier.height(8.dp))
+                            Spacer(modifier = Modifier.height(12.dp))
                             Text(
                                 text = when (group) {
                                     "TODAY" -> stringResource(R.string.calllog_today)
                                     "YESTERDAY" -> stringResource(R.string.calllog_yesterday)
                                     else -> stringResource(R.string.calllog_earlier)
                                 },
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = SaathiTextSecondary,
                                 fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.padding(vertical = 4.dp)
+                                modifier = Modifier.padding(vertical = 4.dp, horizontal = 4.dp)
                             )
                         }
                         items(calls, key = { it.id }) { call ->
@@ -152,20 +174,10 @@ fun CallLogScreen(
                                     .padding(16.dp),
                                 contentAlignment = Alignment.Center
                             ) {
-                                CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                            }
-                        }
-                    }
-
-                    if (uiState.hasMore && !uiState.isLoadingMore) {
-                        item {
-                            Button(
-                                onClick = { viewModel.loadMore() },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 8.dp)
-                            ) {
-                                Text(stringResource(R.string.calllog_load_more))
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    color = SaathiGreen
+                                )
                             }
                         }
                     }
@@ -179,20 +191,25 @@ fun CallLogScreen(
 
 @Composable
 private fun CallRow(call: CallRecord) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
-        )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(SaathiSurface2, RoundedCornerShape(10.dp))
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Row(
+        // Direction avatar
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                .size(40.dp)
+                .background(
+                    if (call.outcome == "missed") MaterialTheme.colorScheme.error.copy(alpha = 0.12f)
+                    else SaathiGreen.copy(alpha = 0.10f),
+                    CircleShape
+                ),
+            contentAlignment = Alignment.Center
         ) {
-            // Direction icon
             Icon(
                 imageVector = when {
                     call.outcome == "missed" -> Icons.AutoMirrored.Filled.CallMissed
@@ -201,54 +218,50 @@ private fun CallRow(call: CallRecord) {
                 },
                 contentDescription = call.direction,
                 tint = if (call.outcome == "missed") MaterialTheme.colorScheme.error
-                       else MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(24.dp)
-            )
-
-            // Caller info
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = call.caller_name ?: formatNumber(call.caller_number),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = formatTime(call.started_at),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = "•",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = formatDuration(call.duration_seconds),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            // Outcome icon
-            Icon(
-                imageVector = when (call.outcome) {
-                    "resolved" -> Icons.Default.CheckCircle
-                    "escalated" -> Icons.AutoMirrored.Filled.CallMade
-                    "missed" -> Icons.AutoMirrored.Filled.CallMissed
-                    else -> Icons.Default.WarningAmber
-                },
-                contentDescription = call.outcome,
-                tint = when (call.outcome) {
-                    "resolved" -> ActiveGreen
-                    "escalated" -> MaterialTheme.colorScheme.primary
-                    "missed" -> MaterialTheme.colorScheme.error
-                    else -> MaterialTheme.colorScheme.outline
-                },
+                       else SaathiGreen,
                 modifier = Modifier.size(20.dp)
             )
         }
+
+        // Caller info
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = call.caller_name ?: formatNumber(call.caller_number),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = formatTime(call.started_at),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = SaathiTextSecondary
+                )
+                Text("·", style = MaterialTheme.typography.bodySmall, color = SaathiTextSecondary)
+                Text(
+                    text = formatDuration(call.duration_seconds),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = SaathiTextSecondary
+                )
+            }
+        }
+
+        // Outcome badge
+        Icon(
+            imageVector = when (call.outcome) {
+                "resolved" -> Icons.Default.CheckCircle
+                "escalated" -> Icons.AutoMirrored.Filled.CallMade
+                "missed" -> Icons.AutoMirrored.Filled.CallMissed
+                else -> Icons.Default.WarningAmber
+            },
+            contentDescription = call.outcome,
+            tint = when (call.outcome) {
+                "resolved" -> SaathiGreen
+                "missed" -> MaterialTheme.colorScheme.error
+                else -> SaathiTextSecondary
+            },
+            modifier = Modifier.size(18.dp)
+        )
     }
 }
 
