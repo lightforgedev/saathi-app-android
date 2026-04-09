@@ -81,17 +81,19 @@ class SpikeTestViewModel(application: Application) : AndroidViewModel(applicatio
         if (_state.value.callActive) return
         log("Simulating incoming call from $FAKE_CALLER_NUMBER")
 
-        if (_state.value.phoneAccountReady) {
+        if (_state.value.phoneAccountReady && !_state.value.echoMode) {
+            // Production path: route through Telecom for real call interception
             phoneAccountManager.reportIncomingCall(
                 callerNumber = FAKE_CALLER_NUMBER,
                 callerName = FAKE_CALLER_NAME,
                 sessionId = "spike-${System.currentTimeMillis()}",
-                echoMode = _state.value.echoMode
+                echoMode = false
             )
             _state.update { it.copy(callActive = true) }
             log("Reported to Telecom — answer via system call notification")
         } else {
-            log("PhoneAccount not ready — running direct loopback")
+            // Echo mode: bypass Telecom entirely — tests audio pipeline directly
+            log(if (_state.value.echoMode) "Echo mode — running direct loopback" else "PhoneAccount not ready — running direct loopback")
             startDirectLoopback()
         }
     }
@@ -172,16 +174,23 @@ class SpikeTestViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             try {
                 phoneAccountManager.registerPhoneAccount()
+            } catch (e: Exception) {
+                Log.e(TAG, "PhoneAccount registration error", e)
+                log("PhoneAccount error: ${e.message}")
+                return@launch
+            }
+            // Verification requires READ_PHONE_NUMBERS — treat failure as registered
+            // since registerPhoneAccount() above already succeeded without throwing.
+            val ready = try {
                 val context = getApplication<Application>()
                 val telecomManager = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-                val account = telecomManager.getPhoneAccount(phoneAccountManager.phoneAccountHandle)
-                val ready = account != null
-                _state.update { it.copy(phoneAccountReady = ready) }
-                log(if (ready) "PhoneAccount registered" else "PhoneAccount not registered (MANAGE_OWN_CALLS needed)")
+                telecomManager.getPhoneAccount(phoneAccountManager.phoneAccountHandle) != null
             } catch (e: Exception) {
-                Log.e(TAG, "PhoneAccount error", e)
-                log("PhoneAccount error: ${e.message}")
+                Log.w(TAG, "getPhoneAccount verification failed (READ_PHONE_NUMBERS?), assuming registered", e)
+                true
             }
+            _state.update { it.copy(phoneAccountReady = ready) }
+            log(if (ready) "PhoneAccount registered" else "PhoneAccount not registered (MANAGE_OWN_CALLS needed)")
         }
     }
 
