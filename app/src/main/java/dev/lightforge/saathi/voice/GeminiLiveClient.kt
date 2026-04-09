@@ -233,6 +233,20 @@ class GeminiLiveClient @Inject constructor() {
     }
 
     /**
+     * Injects a system message into the conversation as a user turn.
+     * Used to send timed warnings (e.g. "30 seconds remaining") without user speech.
+     *
+     * @param text Plain text to inject — Gemini will respond to it as if the user said it.
+     */
+    fun sendSystemMessage(text: String) {
+        if (!isConnected || webSocket == null) return
+        val escaped = text.replace("\\", "\\\\").replace("\"", "\\\"")
+        val json = """{"client_content":{"turns":[{"role":"user","parts":[{"text":"$escaped"}]}],"turn_complete":true}}"""
+        webSocket?.send(json)
+        Log.d(TAG, "System message injected: ${text.take(80)}")
+    }
+
+    /**
      * Closes the WebSocket (or stops echo loopback).
      */
     fun disconnect() {
