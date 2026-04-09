@@ -10,6 +10,9 @@
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
     <uses-permission android:name="android.permission.WRITE_CALL_LOG" />
 
+    <!-- Default dialer: intercept ALL incoming cellular calls via InCallService -->
+    <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
+
     <!-- Audio: mic capture for Gemini voice -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
@@ -56,6 +59,16 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Required to qualify for ROLE_DIALER / default dialer -->
+            <intent-filter>
+                <action android:name="android.intent.action.DIAL" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.DIAL" />
+                <data android:scheme="tel" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
 
         <!-- Spike 1 test harness — debug only, remove before release -->
@@ -69,7 +82,7 @@
             </intent-filter>
         </activity>
 
-        <!-- ConnectionService: handles telecom call routing -->
+        <!-- ConnectionService: handles telecom call routing (SELF_MANAGED VoIP) -->
         <service
             android:name=".telecom.SaathiConnectionService"
             android:permission="android.permission.BIND_TELECOM_CONNECTION_SERVICE"
@@ -77,6 +90,23 @@
             <intent-filter>
                 <action android:name="android.telecom.ConnectionService" />
             </intent-filter>
+        </service>
+
+        <!--
+            InCallService: receives ALL calls when Saathi is the default dialer.
+            - android.telecom.IN_CALL_SERVICE_UI = true: we replace the system dialer UI
+            - Required permissions: BIND_INCALL_SERVICE (enforced by system)
+        -->
+        <service
+            android:name=".telecom.SaathiInCallService"
+            android:permission="android.permission.BIND_INCALL_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.telecom.InCallService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.telecom.IN_CALL_SERVICE_UI"
+                android:value="true" />
         </service>
 
         <!-- Persistent foreground service for call readiness -->

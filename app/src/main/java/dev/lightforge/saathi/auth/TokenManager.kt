@@ -33,6 +33,13 @@ class TokenManager @Inject constructor(
         private const val KEY_DEVICE_TOKEN = "device_token"
         private const val KEY_ORG_ID = "org_id"
         private const val KEY_DEVICE_ID = "device_id"
+        private const val PREFS_STATE = "saathi_state"
+        private const val KEY_SAATHI_ACTIVE = "saathi_active"
+    }
+
+    // Plain (non-encrypted) prefs for non-sensitive operational state
+    private val statePrefs by lazy {
+        context.getSharedPreferences(PREFS_STATE, android.content.Context.MODE_PRIVATE)
     }
 
     private val masterKey: MasterKey by lazy {
@@ -90,10 +97,22 @@ class TokenManager @Inject constructor(
     }
 
     /**
+     * Whether Saathi is active (call_mode != "off"). Persisted locally so
+     * [SaathiInCallService] can check without a network call during onCallAdded().
+     * Defaults to true (active) until a config sync says otherwise.
+     */
+    fun setSaathiActive(active: Boolean) {
+        statePrefs.edit().putBoolean(KEY_SAATHI_ACTIVE, active).apply()
+    }
+
+    fun isSaathiActive(): Boolean = statePrefs.getBoolean(KEY_SAATHI_ACTIVE, true)
+
+    /**
      * Clears all stored credentials. Called during device un-pairing.
      */
     fun clearAll() {
         encryptedPrefs.edit().clear().apply()
+        statePrefs.edit().clear().apply()
         Log.i(TAG, "All stored credentials cleared")
     }
 

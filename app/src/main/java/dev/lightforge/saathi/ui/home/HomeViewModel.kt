@@ -3,6 +3,7 @@ package dev.lightforge.saathi.ui.home
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.lightforge.saathi.auth.TokenManager
 import dev.lightforge.saathi.network.AegisApiClient
 import dev.lightforge.saathi.network.CallRecord
 import dev.lightforge.saathi.network.UpdateSettingsRequest
@@ -26,7 +27,8 @@ data class HomeUiState(
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
-    private val api: AegisApiClient
+    private val api: AegisApiClient,
+    private val tokenManager: TokenManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(HomeUiState())
@@ -78,6 +80,7 @@ class HomeViewModel @Inject constructor(
                 if (response.isSuccessful) {
                     val body = response.body()!!
                     val isActive = body.restaurant.call_mode != "off"
+                    tokenManager.setSaathiActive(isActive)
                     _uiState.value = _uiState.value.copy(
                         restaurantName = body.restaurant.name,
                         isActive = isActive
@@ -91,6 +94,7 @@ class HomeViewModel @Inject constructor(
 
     fun toggleActive(active: Boolean) {
         val newMode = if (active) "full_auto" else "off"
+        tokenManager.setSaathiActive(active) // persist immediately for InCallService
         _uiState.value = _uiState.value.copy(isActive = active)
 
         viewModelScope.launch(Dispatchers.IO) {
@@ -98,6 +102,7 @@ class HomeViewModel @Inject constructor(
                 api.updateSettings(UpdateSettingsRequest(call_mode = newMode))
             } catch (_: Exception) {
                 // Revert optimistic update on failure
+                tokenManager.setSaathiActive(!active)
                 _uiState.value = _uiState.value.copy(isActive = !active)
             }
         }
