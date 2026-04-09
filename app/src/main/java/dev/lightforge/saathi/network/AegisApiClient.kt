@@ -166,19 +166,16 @@ data class SessionResponse(
     val gemini_token: String,
     val gemini_ws_url: String,
     val system_instruction: String,
-    val tools: List<ToolDeclarationDto>,
+    val tools: List<ToolDeclarationDto> = emptyList(),
     val config: SessionConfig
 )
 
 data class ToolDeclarationDto(
     val name: String,
     val description: String,
-    val parameters: Map<String, ToolParameterDto>
-)
-
-data class ToolParameterDto(
-    val type: String,
-    val description: String
+    // Backend sends parameters as a JSON-encoded string or object — use JsonElement to avoid
+    // Gson throwing "Expected BEGIN_OBJECT but was STRING" when the shape varies.
+    val parameters: com.google.gson.JsonElement? = null
 )
 
 data class SessionConfig(
