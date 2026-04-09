@@ -185,6 +185,19 @@ class GeminiLiveClient @Inject constructor() {
     }
 
     /**
+     * Sends an empty user turn after setupComplete to trigger Gemini's opening greeting.
+     *
+     * Without this, Gemini waits for audio input before speaking. For phone call
+     * reception, the AI must answer first — this empty turn acts as the "phone picked up"
+     * signal that triggers the greeting defined in the system instruction.
+     */
+    private fun sendInitialTurn() {
+        val json = """{"client_content":{"turns":[{"role":"user","parts":[{"text":""}]}],"turn_complete":true}}"""
+        webSocket?.send(json)
+        Log.d(TAG, "Initial turn sent — awaiting Gemini greeting")
+    }
+
+    /**
      * Sends a PCM audio chunk to Gemini.
      * Audio must be 16kHz 16-bit mono (matches Gemini Live realtime input format).
      *
@@ -324,6 +337,9 @@ class GeminiLiveClient @Inject constructor() {
             when {
                 root.has("setupComplete") -> {
                     Log.i(TAG, "Gemini session setup complete")
+                    // Trigger Gemini to speak first — send an empty user turn so the model
+                    // immediately delivers its opening greeting instead of waiting for audio.
+                    sendInitialTurn()
                 }
 
                 root.has("serverContent") -> {
