@@ -63,9 +63,17 @@ class SaathiWebSocket @Inject constructor(
 
     /**
      * Connects to the backend WebSocket with the device token.
-     * Call from SaathiForegroundService.
+     * Call from SaathiForegroundService. Idempotent — no-op if already connected.
      */
     fun connect(baseWsUrl: String) {
+        // Guard: don't create a second connection if one is already live or connecting.
+        // SaathiForegroundService.onStartCommand() is called every time the service
+        // is started (MainActivity launch + boot), so this must be idempotent.
+        if (isConnected.get() || webSocket != null) {
+            Log.d(TAG, "Already connected/connecting — skipping duplicate connect()")
+            return
+        }
+
         val token = tokenManager.getDeviceToken() ?: run {
             Log.w(TAG, "No device token — cannot connect WebSocket")
             return
@@ -97,12 +105,14 @@ class SaathiWebSocket @Inject constructor(
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 Log.i(TAG, "WebSocket closed: $code $reason")
                 isConnected.set(false)
+                this@SaathiWebSocket.webSocket = null
                 scheduleReconnect(baseWsUrl)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.e(TAG, "WebSocket failure: ${t.message}")
                 isConnected.set(false)
+                this@SaathiWebSocket.webSocket = null
                 scheduleReconnect(baseWsUrl)
             }
         })
