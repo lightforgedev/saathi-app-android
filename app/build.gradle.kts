@@ -28,8 +28,8 @@ android {
     buildTypes {
         debug {
             isDebuggable = true
-            buildConfigField("String", "AEGIS_API_BASE_URL", "\"https://staging.saathi.help\"")
-            buildConfigField("String", "AEGIS_WS_BASE_URL", "\"wss://staging.saathi.help\"")
+            buildConfigField("String", "AEGIS_API_BASE_URL", "\"http://192.168.1.129:4000\"")
+            buildConfigField("String", "AEGIS_WS_BASE_URL", "\"ws://192.168.1.129:4000\"")
         }
         release {
             isMinifyEnabled = true
