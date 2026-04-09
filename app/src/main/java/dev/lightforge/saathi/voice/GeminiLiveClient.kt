@@ -102,23 +102,32 @@ class GeminiLiveClient @Inject constructor() {
         geminiWsUrl: String,
         modelId: String = DEFAULT_MODEL,
         systemInstruction: String? = null,
-        tools: List<ToolDeclaration> = emptyList()
+        tools: List<ToolDeclaration> = emptyList(),
+        onEvent: ((String) -> Unit)? = null
     ) {
         if (isConnected) {
             Log.w(TAG, "Already connected — disconnecting first")
             disconnect()
         }
 
+        val host = try { java.net.URI(geminiWsUrl).host } catch (e: Exception) { "?" }
+        Log.i(TAG, "Connecting to Gemini Live: host=$host")
+        onEvent?.invoke("WS connecting → $host")
+
         val request = Request.Builder().url(geminiWsUrl).build()
 
         webSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
-                Log.i(TAG, "WebSocket connected to Gemini Live")
+                Log.i(TAG, "WebSocket connected (${response.code})")
                 isConnected = true
+                onEvent?.invoke("WS connected (${response.code}) — sending setup")
                 sendSetupMessage(ws, modelId, systemInstruction, tools)
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
+                if (text.contains("setupComplete")) {
+                    onEvent?.invoke("Gemini ready — speak now")
+                }
                 handleTextMessage(text)
             }
 
@@ -129,17 +138,21 @@ class GeminiLiveClient @Inject constructor() {
 
             override fun onClosing(ws: WebSocket, code: Int, reason: String) {
                 Log.i(TAG, "WebSocket closing: $code $reason")
+                onEvent?.invoke("WS closing: $code ${reason.take(60)}")
                 ws.close(1000, null)
                 isConnected = false
             }
 
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
                 Log.i(TAG, "WebSocket closed: $code $reason")
+                onEvent?.invoke("WS closed: $code ${reason.take(60)}")
                 isConnected = false
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "WebSocket failure: ${t.message} (http=${response?.code})", t)
+                val httpCode = response?.code
+                Log.e(TAG, "WebSocket FAILED: ${t.message} (http=$httpCode)", t)
+                onEvent?.invoke("WS FAILED http=$httpCode: ${t.message?.take(80)}")
                 isConnected = false
             }
         })

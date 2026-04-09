@@ -196,13 +196,22 @@ class SpikeTestViewModel(application: Application) : AndroidViewModel(applicatio
                 val session = response.body()!!
                 log("Session created: ${session.session_id}")
                 log("Connecting to Gemini WebSocket…")
-                _state.update { it.copy(webSocketState = "CONNECTING") }
+                _state.update { it.copy(webSocketState = "CONNECTING", callActive = true) }
 
                 client.connect(
                     geminiWsUrl = session.gemini_ws_url,
-                    systemInstruction = session.system_instruction
+                    systemInstruction = session.system_instruction,
+                    onEvent = { msg ->
+                        log(msg)
+                        when {
+                            msg.startsWith("WS connected") -> _state.update { it.copy(webSocketState = "CONNECTED") }
+                            msg.startsWith("Gemini ready") -> _state.update { it.copy(webSocketState = "CONNECTED") }
+                            msg.startsWith("WS FAILED") -> _state.update { it.copy(webSocketState = "FAILED") }
+                            msg.startsWith("WS closing") || msg.startsWith("WS closed") ->
+                                _state.update { it.copy(webSocketState = "CLOSED") }
+                        }
+                    }
                 )
-                _state.update { it.copy(webSocketState = "CONNECTED", callActive = true) }
 
                 // Collect Gemini audio responses → speaker
                 launch {
