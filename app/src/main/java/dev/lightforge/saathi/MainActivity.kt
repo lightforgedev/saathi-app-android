@@ -1,6 +1,8 @@
 package dev.lightforge.saathi
 
+import android.content.Intent
 import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -10,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
+import androidx.core.content.ContextCompat
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -17,6 +20,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import dagger.hilt.android.AndroidEntryPoint
 import dev.lightforge.saathi.auth.TokenManager
+import dev.lightforge.saathi.service.SaathiForegroundService
 import dev.lightforge.saathi.ui.calllog.CallLogScreen
 import dev.lightforge.saathi.ui.home.HomeScreen
 import dev.lightforge.saathi.ui.settings.SettingsScreen
@@ -47,6 +51,13 @@ class MainActivity : ComponentActivity() {
             statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT)
         )
+
+        // Start foreground service on every launch so PhoneAccount is registered
+        // and WebSocket connects immediately (not just after first boot).
+        if (tokenManager.hasToken()) {
+            val serviceIntent = Intent(this, SaathiForegroundService::class.java)
+            ContextCompat.startForegroundService(this, serviceIntent)
+        }
 
         val startDestination = if (tokenManager.hasToken()) NavRoute.HOME else NavRoute.SETUP
 

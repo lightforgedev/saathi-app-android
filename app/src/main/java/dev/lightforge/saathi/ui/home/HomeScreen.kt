@@ -1,5 +1,10 @@
 package dev.lightforge.saathi.ui.home
 
+import android.app.role.RoleManager
+import android.content.Intent
+import android.telecom.TelecomManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -22,6 +27,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CallMade
 import androidx.compose.material.icons.automirrored.filled.CallReceived
@@ -41,6 +50,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.scale
@@ -70,6 +80,11 @@ fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    val roleResultLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { viewModel.checkDefaultDialer() }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -94,6 +109,21 @@ fun HomeScreen(
 
             // Top brand + restaurant name
             BrandHeader(restaurantName = uiState.restaurantName)
+
+            // Default dialer warning — shown after every APK install until re-granted
+            if (!uiState.isDefaultDialer) {
+                Spacer(modifier = Modifier.height(16.dp))
+                DefaultDialerBanner {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                        val rm = context.getSystemService(RoleManager::class.java)
+                        roleResultLauncher.launch(rm.createRequestRoleIntent(RoleManager.ROLE_DIALER))
+                    } else {
+                        val intent = Intent(TelecomManager.ACTION_CHANGE_DEFAULT_DIALER)
+                            .putExtra(TelecomManager.EXTRA_CHANGE_DEFAULT_DIALER_PACKAGE_NAME, context.packageName)
+                        roleResultLauncher.launch(intent)
+                    }
+                }
+            }
 
             Spacer(modifier = Modifier.height(40.dp))
 
@@ -169,6 +199,49 @@ fun HomeScreen(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun DefaultDialerBanner(onFix: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFFFFB300).copy(alpha = 0.15f)
+        ),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.WarningAmber,
+                contentDescription = null,
+                tint = Color(0xFFFFB300),
+                modifier = Modifier.size(20.dp)
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Not set as default phone app",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Text(
+                    text = "Calls won't be intercepted",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = SaathiTextSecondary
+                )
+            }
+            Button(
+                onClick = onFix,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFB300))
+            ) {
+                Text("Fix", color = Color.Black, fontSize = 12.sp)
+            }
         }
     }
 }

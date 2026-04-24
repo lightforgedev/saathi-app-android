@@ -10,17 +10,18 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import dagger.hilt.android.AndroidEntryPoint
-import dev.lightforge.saathi.BuildConfig
 import dev.lightforge.saathi.MainActivity
 import dev.lightforge.saathi.R
 import dev.lightforge.saathi.SaathiApplication
+import dev.lightforge.saathi.auth.TokenManager
 import dev.lightforge.saathi.data.sync.DataSyncManager
-import dev.lightforge.saathi.network.SaathiWebSocket
 import dev.lightforge.saathi.telecom.PhoneAccountManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -29,9 +30,10 @@ import javax.inject.Inject
  *
  * Responsibilities:
  * 1. Registers PhoneAccount with Telecom framework
- * 2. Maintains WebSocket connection to backend (heartbeat, config pushes, outbound call commands)
+ * 2. Polls GET /config every 60s for config updates (WebSocket not implemented in v1 backend)
  * 3. Triggers initial data sync
  * 4. Shows persistent notification ("Saathi is ready")
+ * 5. Stops itself on 401 (device revoked / token expired)
  *
  * Started at boot by [BootReceiver] and when the app launches.
  * Runs indefinitely until explicitly stopped or device unpaired.
@@ -42,11 +44,12 @@ class SaathiForegroundService : Service() {
     companion object {
         private const val TAG = "SaathiFgService"
         private const val NOTIFICATION_ID = 1001
+        private const val CONFIG_POLL_INTERVAL_MS = 60_000L
     }
 
     @Inject lateinit var phoneAccountManager: PhoneAccountManager
-    @Inject lateinit var webSocket: SaathiWebSocket
     @Inject lateinit var dataSyncManager: DataSyncManager
+    @Inject lateinit var tokenManager: TokenManager
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -74,33 +77,28 @@ class SaathiForegroundService : Service() {
         // Register PhoneAccount
         phoneAccountManager.registerPhoneAccount()
 
-        // Connect WebSocket to backend
-        webSocket.connect(BuildConfig.AEGIS_WS_BASE_URL)
-
-        // Listen for WebSocket messages
-        serviceScope.launch {
-            webSocket.messages.collect { message ->
-                when (message) {
-                    is SaathiWebSocket.ServerMessage.ConfigSync -> {
-                        dataSyncManager.applyDeltaSync(message.data)
-                    }
-                    is SaathiWebSocket.ServerMessage.OutboundCall -> {
-                        phoneAccountManager.placeOutgoingCall(
-                            message.targetNumber,
-                            message.sessionId
-                        )
-                    }
-                    is SaathiWebSocket.ServerMessage.DeviceRevoked -> {
-                        Log.w(TAG, "Device revoked — stopping service")
-                        stopSelf()
-                    }
-                }
-            }
-        }
-
         // Initial data sync
         serviceScope.launch {
             dataSyncManager.fullSync()
+        }
+
+        // Poll config every 60s. Stop on 401 (device revoked).
+        serviceScope.launch {
+            while (isActive) {
+                delay(CONFIG_POLL_INTERVAL_MS)
+                val ok = dataSyncManager.fullSync()
+                if (!ok) {
+                    Log.w(TAG, "Config poll returned error — checking for 401")
+                    // fullSync() returns false on network error AND 401.
+                    // The AuthInterceptor will clear the token on 401; check it.
+                    // If token is gone, this device was revoked — stop service.
+                    if (!tokenManager.hasToken()) {
+                        Log.w(TAG, "Token cleared (device revoked) — stopping service")
+                        stopSelf()
+                        break
+                    }
+                }
+            }
         }
 
         return START_STICKY // Restart if killed
@@ -110,7 +108,6 @@ class SaathiForegroundService : Service() {
 
     override fun onDestroy() {
         Log.i(TAG, "Foreground service destroyed")
-        webSocket.disconnect()
         serviceScope.cancel()
         super.onDestroy()
     }

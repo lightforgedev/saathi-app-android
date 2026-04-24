@@ -73,8 +73,9 @@ class DevicePairing @Inject constructor(
                 // Store token securely in Android Keystore
                 tokenManager.storeDeviceToken(body.device_token)
                 tokenManager.storeOrgId(body.org_id)
+                body.device_id?.let { tokenManager.storeDeviceId(it) }
                 currentPairingId = null
-                Log.i(TAG, "Device paired with ${body.restaurant.name}")
+                Log.i(TAG, "Device paired with ${body.restaurant.name} (device_id=${body.device_id})")
                 PairingResult.Paired(body.restaurant.name)
             } else {
                 Log.e(TAG, "OTP verification failed: ${response.code()}")

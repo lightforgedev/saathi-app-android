@@ -1,8 +1,12 @@
 package dev.lightforge.saathi.ui.home
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import android.app.role.RoleManager
+import android.telecom.TelecomManager
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.lightforge.saathi.auth.TokenManager
 import dev.lightforge.saathi.network.AegisApiClient
 import dev.lightforge.saathi.network.CallRecord
 import dev.lightforge.saathi.network.UpdateSettingsRequest
@@ -16,6 +20,7 @@ import javax.inject.Inject
 data class HomeUiState(
     val restaurantName: String = "",
     val isActive: Boolean = true,
+    val isDefaultDialer: Boolean = true,
     val callsHandled: Int = 0,
     val reservationsMade: Int = 0,
     val lastCallDurationSeconds: Int? = null,
@@ -26,8 +31,10 @@ data class HomeUiState(
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
-    private val api: AegisApiClient
-) : ViewModel() {
+    application: Application,
+    private val api: AegisApiClient,
+    private val tokenManager: TokenManager
+) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
@@ -36,6 +43,19 @@ class HomeViewModel @Inject constructor(
         loadStats()
         loadRecentCalls()
         loadConfig()
+        checkDefaultDialer()
+    }
+
+    fun checkDefaultDialer() {
+        val ctx = getApplication<Application>()
+        val isDefault = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            val rm = ctx.getSystemService(RoleManager::class.java)
+            rm?.isRoleHeld(RoleManager.ROLE_DIALER) == true
+        } else {
+            val tm = ctx.getSystemService(TelecomManager::class.java)
+            tm?.defaultDialerPackage == ctx.packageName
+        }
+        _uiState.value = _uiState.value.copy(isDefaultDialer = isDefault)
     }
 
     fun loadStats() {
@@ -78,6 +98,7 @@ class HomeViewModel @Inject constructor(
                 if (response.isSuccessful) {
                     val body = response.body()!!
                     val isActive = body.restaurant.call_mode != "off"
+                    tokenManager.setSaathiActive(isActive)
                     _uiState.value = _uiState.value.copy(
                         restaurantName = body.restaurant.name,
                         isActive = isActive
@@ -91,6 +112,7 @@ class HomeViewModel @Inject constructor(
 
     fun toggleActive(active: Boolean) {
         val newMode = if (active) "full_auto" else "off"
+        tokenManager.setSaathiActive(active) // persist immediately for InCallService
         _uiState.value = _uiState.value.copy(isActive = active)
 
         viewModelScope.launch(Dispatchers.IO) {
@@ -98,6 +120,7 @@ class HomeViewModel @Inject constructor(
                 api.updateSettings(UpdateSettingsRequest(call_mode = newMode))
             } catch (_: Exception) {
                 // Revert optimistic update on failure
+                tokenManager.setSaathiActive(!active)
                 _uiState.value = _uiState.value.copy(isActive = !active)
             }
         }
